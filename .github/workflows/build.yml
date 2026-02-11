@@ -1,0 +1,73 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        run: cmake -G Ninja -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build/nexus_js_loader.dll dist/
+          cp build/nexus_js_subprocess.exe dist/
+          cp build/libcef.dll dist/
+          cp build/chrome_elf.dll dist/
+          cp build/v8_context_snapshot.bin dist/
+          cp build/icudtl.dat dist/
+          cp build/chrome_100_percent.pak dist/
+          cp build/chrome_200_percent.pak dist/
+          cp build/resources.pak dist/
+          cp -r build/locales dist/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-js-loader
+          path: dist/
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-js-loader
+          path: dist/
+
+      - name: Create release archive
+        run: cd dist && zip -r ../nexus-js-loader.zip .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nexus-js-loader.zip
+          generate_release_notes: true

@@ -1,20 +1,21 @@
 # Download CEF binary distribution at configure time
 # Uses the Spotify CDN for CEF builds
 
-set(CEF_VERSION "126.2.18+g3b8a91c+chromium-126.0.6478.183" CACHE STRING "CEF version to download")
+set(CEF_VERSION "145.0.22+g0fa8d1b+chromium-145.0.7632.45" CACHE STRING "CEF version to download")
 set(CEF_PLATFORM "windows64" CACHE STRING "CEF platform")
 
 # URL-encode the version string (+ → %2B)
 string(REPLACE "+" "%2B" CEF_VERSION_ENCODED "${CEF_VERSION}")
 
-set(CEF_DISTRIBUTION "cef_binary_${CEF_VERSION}_${CEF_PLATFORM}")
+set(CEF_DISTRIBUTION "cef_binary_${CEF_VERSION}_${CEF_PLATFORM}_minimal")
 string(REPLACE "+" "%2B" CEF_DISTRIBUTION_ENCODED "${CEF_DISTRIBUTION}")
 
 set(CEF_DOWNLOAD_DIR "${CMAKE_SOURCE_DIR}/third_party/cef")
-set(CEF_ROOT "${CEF_DOWNLOAD_DIR}/${CEF_DISTRIBUTION}")
+# Use a simple directory name to avoid Ninja path-escaping issues with '+' chars
+set(CEF_ROOT "${CEF_DOWNLOAD_DIR}/cef_dist")
 
 if(NOT EXISTS "${CEF_ROOT}")
-    set(CEF_URL "https://cef-builds.spotifycdn.com/${CEF_DISTRIBUTION_ENCODED}_minimal.tar.bz2")
+    set(CEF_URL "https://cef-builds.spotifycdn.com/${CEF_DISTRIBUTION_ENCODED}.tar.bz2")
 
     message(STATUS "Downloading CEF from ${CEF_URL}")
     message(STATUS "This may take a while...")
@@ -44,6 +45,9 @@ if(NOT EXISTS "${CEF_ROOT}")
     endif()
 
     file(REMOVE "${CEF_DOWNLOAD_DIR}/cef.tar.bz2")
+
+    # Rename the extracted directory to a simple name (avoids '+' in paths breaking Ninja)
+    file(RENAME "${CEF_DOWNLOAD_DIR}/${CEF_DISTRIBUTION}" "${CEF_ROOT}")
 endif()
 
 message(STATUS "CEF root: ${CEF_ROOT}")

@@ -16,15 +16,35 @@ echo "Build type:  $BUILD_TYPE"
 echo "Docker image: $DOCKER_IMAGE"
 echo ""
 
+# Write a batch file that cmake will execute inside Wine.
+# The project is mounted at /project (Linux) = Z:\project (Wine).
+BATCH_FILE="$PROJECT_DIR/build.bat"
+
+cat > "$BATCH_FILE" <<EOF
+@echo off
+call C:\\x64.bat
+cmake.exe -G Ninja -B Z:\\project\\build -S Z:\\project -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
+EOF
+
 docker run --rm \
+    --platform linux/amd64 \
     -v "$PROJECT_DIR:/project" \
+    --entrypoint /bin/bash \
     "$DOCKER_IMAGE" \
-    bash -c "cmake -G Ninja -B /project/build -S /project \
-        -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
-        -DCMAKE_SYSTEM_NAME=Windows \
-        && cmake --build /project/build --config $BUILD_TYPE"
+    -c '
+        # Configure step
+        wine64 cmd /c Z:\\project\\build.bat
+
+        # Fix Wine/Rosetta null-byte corruption in Ninja build files
+        find /project/build -name "build.ninja" -exec sed -i "s/\x00//g" {} +
+
+        # Build step
+        wine64 cmd /c "C:\x64.bat && cmake.exe --build Z:\project\build --config '"${BUILD_TYPE}"'"
+    '
+
+rm -f "$BATCH_FILE"
 
 echo ""
 echo "=== Build complete ==="
 echo "Output: $PROJECT_DIR/build/"
-ls -la "$PROJECT_DIR/build/"*.dll "$PROJECT_DIR/build/"*.exe 2>/dev/null || echo "(check build/Release/ or build/ for output files)"
+ls -la "$PROJECT_DIR/build/"*.dll "$PROJECT_DIR/build/"*.exe 2>/dev/null || echo "(check build/ for output files)"

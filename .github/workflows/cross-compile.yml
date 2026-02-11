@@ -1,0 +1,48 @@
+name: Cross-Compile (Linux)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cross-compile:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Pull Docker image
+        run: docker pull madduci/docker-wine-msvc:17.8-2022
+
+      - name: Build with Docker (Wine + MSVC)
+        run: |
+          cat > build.bat <<'BATCH'
+          @echo off
+          call C:\x64.bat
+          cmake.exe -G Ninja -B Z:\project\build -S Z:\project -DCMAKE_BUILD_TYPE=Release
+          BATCH
+
+          docker run --rm \
+            --platform linux/amd64 \
+            -v "${{ github.workspace }}:/project" \
+            --entrypoint /bin/bash \
+            madduci/docker-wine-msvc:17.8-2022 \
+            -c '
+              wine64 cmd /c Z:\\project\\build.bat
+              find /project/build -name "build.ninja" -exec sed -i "s/\x00//g" {} +
+              wine64 cmd /c "C:\x64.bat && cmake.exe --build Z:\project\build --config Release"
+            '
+
+          rm -f build.bat
+
+      - name: Verify build outputs
+        run: |
+          echo "=== Build outputs ==="
+          ls -lh build/nexus_js_loader.dll
+          ls -lh build/nexus_js_subprocess.exe
+          ls -lh build/libcef.dll
