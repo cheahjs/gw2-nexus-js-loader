@@ -13,4 +13,7 @@ extern bool        OverlayVisible; // Whether the CEF overlay is visible/focused
 // Helper: get the directory containing the DLL
 const char* GetDllDirectory();
 
+// Helper: get the CEF subfolder path ({DllDirectory}\nexus_js_loader)
+const char* GetCefDirectory();
+
 } // namespace Globals

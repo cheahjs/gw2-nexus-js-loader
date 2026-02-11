@@ -20,8 +20,10 @@ static bool                     s_initialized = false;
 bool Initialize() {
     if (s_initialized) return true;
 
-    // Determine subprocess path (same directory as DLL)
-    std::string subprocessPath = std::string(Globals::GetDllDirectory()) + "\\nexus_js_subprocess.exe";
+    const char* cefDir = Globals::GetCefDirectory();
+
+    // Subprocess lives in the CEF subfolder
+    std::string subprocessPath = std::string(cefDir) + "\\nexus_js_subprocess.exe";
 
     CefMainArgs mainArgs(Globals::HModule);
 
@@ -35,14 +37,23 @@ bool Initialize() {
 
     CefString(&settings.browser_subprocess_path).FromString(subprocessPath);
 
-    // Set cache path to addon directory
-    std::string cachePath = std::string(Globals::GetDllDirectory()) + "\\cef_cache";
+    // Resources and locales in CEF subfolder
+    std::string resourcesDir = std::string(cefDir);
+    CefString(&settings.resources_dir_path).FromString(resourcesDir);
+
+    std::string localesDir = std::string(cefDir) + "\\locales";
+    CefString(&settings.locales_dir_path).FromString(localesDir);
+
+    // Cache and log in CEF subfolder
+    std::string cachePath = std::string(cefDir) + "\\cef_cache";
     CefString(&settings.cache_path).FromString(cachePath);
 
-    // Set log file
-    std::string logPath = std::string(Globals::GetDllDirectory()) + "\\cef_debug.log";
+    std::string logPath = std::string(cefDir) + "\\cef_debug.log";
     CefString(&settings.log_file).FromString(logPath);
     settings.log_severity = LOGSEVERITY_WARNING;
+
+    // Ensure libcef.dll's transitive dependencies can be found in the subfolder
+    SetDllDirectoryA(cefDir);
 
     if (!CefInitialize(mainArgs, settings, s_app, nullptr)) {
         if (Globals::API) {

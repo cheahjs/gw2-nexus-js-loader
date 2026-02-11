@@ -16,6 +16,11 @@ echo "Build type:  $BUILD_TYPE"
 echo "Docker image: $DOCKER_IMAGE"
 echo ""
 
+# Make build directory world-writable so the Docker wine user (different UID
+# than the host) can create subdirectories and write files on the bind mount
+mkdir -p "$PROJECT_DIR/build"
+chmod 777 "$PROJECT_DIR/build"
+
 docker run --rm \
     --platform linux/amd64 \
     -v "$PROJECT_DIR:/project" \

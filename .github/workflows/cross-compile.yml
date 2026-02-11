@@ -50,9 +50,11 @@ jobs:
 
       - name: Build with Docker (Wine + MSVC)
         run: |
-          # Pre-create build directory structure from host to work around
-          # Wine/CMake inability to create directories on bind-mounted volumes
-          mkdir -p "${{ github.workspace }}/build/CMakeFiles/pkgRedirects"
+          # Make build directory world-writable so the Docker wine user (different
+          # UID than the host runner) can create subdirectories and write files on
+          # the bind-mounted volume
+          mkdir -p "${{ github.workspace }}/build"
+          chmod 777 "${{ github.workspace }}/build"
 
           docker run --rm \
             --platform linux/amd64 \
@@ -94,4 +96,30 @@ jobs:
           echo "=== Build outputs ==="
           ls -lh build/nexus_js_loader.dll
           ls -lh build/nexus_js_subprocess.exe
-          ls -lh build/libcef.dll
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist/nexus_js_loader/locales
+          cp build/nexus_js_loader.dll dist/
+          cp build/nexus_js_subprocess.exe dist/nexus_js_loader/
+          # CEF core DLLs
+          CEF=third_party/cef/cef_dist
+          for f in libcef.dll chrome_elf.dll v8_context_snapshot.bin \
+                   d3dcompiler_47.dll libEGL.dll libGLESv2.dll \
+                   vk_swiftshader.dll vulkan-1.dll dxcompiler.dll dxil.dll; do
+            [ -f "$CEF/Release/$f" ] && cp "$CEF/Release/$f" dist/nexus_js_loader/
+          done
+          [ -f "$CEF/Release/vk_swiftshader_icd.json" ] && \
+            cp "$CEF/Release/vk_swiftshader_icd.json" dist/nexus_js_loader/
+          # CEF resources
+          for f in icudtl.dat chrome_100_percent.pak chrome_200_percent.pak resources.pak; do
+            cp "$CEF/Resources/$f" dist/nexus_js_loader/
+          done
+          cp -r "$CEF/Resources/locales/"* dist/nexus_js_loader/locales/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-js-loader-cross
+          path: dist/
+

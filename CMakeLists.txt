@@ -81,6 +81,7 @@ set(PLUGIN_SOURCES
     src/plugin/ipc_handler.cpp
     src/plugin/web_app_manager.h
     src/plugin/web_app_manager.cpp
+    src/plugin/delay_load_hook.cpp
 )
 
 add_library(nexus_js_loader SHARED ${PLUGIN_SOURCES} ${IMGUI_SOURCES} ${SHARED_SOURCES})
@@ -112,17 +113,23 @@ target_link_libraries(nexus_js_loader PRIVATE
     "${CEF_LIB_DIR}/libcef.lib"
     d3d11.lib
     dxgi.lib
+    delayimp.lib
 )
+
+# Delay-load libcef.dll so our hook redirects to the subfolder copy
+target_link_options(nexus_js_loader PRIVATE /DELAYLOAD:libcef.dll)
 
 # Copy CEF runtime files next to the DLL
 copy_cef_runtime_files(nexus_js_loader)
 
-# Copy subprocess exe next to DLL after it's built
+# Copy subprocess exe to CEF subfolder after it's built
 add_custom_command(TARGET nexus_js_loader POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:nexus_js_loader>/nexus_js_loader"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE:nexus_js_subprocess>"
-        "$<TARGET_FILE_DIR:nexus_js_loader>"
-    COMMENT "Copying subprocess exe..."
+        "$<TARGET_FILE_DIR:nexus_js_loader>/nexus_js_loader"
+    COMMENT "Copying subprocess exe to subfolder..."
 )
 
 # ============================================================================

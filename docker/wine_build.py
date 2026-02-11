@@ -225,6 +225,7 @@ def link_dll():
         f.write(f"{CEF_LIB}\n")
         f.write("d3d11.lib\n")
         f.write("dxgi.lib\n")
+        f.write("delayimp.lib\n")
         for lib in SYSTEM_LIBS.split():
             f.write(f"{lib}\n")
 
@@ -234,6 +235,7 @@ def link_dll():
         f"call C:\\x64.bat\n"
         f"cd /d {BUILD_DIR_WIN}\n"
         f"link.exe /nologo /machine:x64 /INCREMENTAL:NO /DLL "
+        f"/DELAYLOAD:libcef.dll "
         f"/OUT:nexus_js_loader.dll "
         f"/IMPLIB:nexus_js_loader.lib "
         f"@{rsp_win}\n"
@@ -274,7 +276,7 @@ def main():
     project_objs = find_obj_files("CMakeFiles/nexus_js_loader.dir")
     sub_objs = find_obj_files("CMakeFiles/nexus_js_subprocess.dir")
 
-    if len(project_objs) < 11:  # We expect 11 plugin obj files
+    if len(project_objs) < 12:  # We expect 12 plugin obj files (including delay_load_hook)
         print(f"\nERROR: Only {len(project_objs)} plugin obj files found (expected 11)")
         sys.exit(1)
     if len(sub_objs) < 4:  # We expect 4 subprocess obj files

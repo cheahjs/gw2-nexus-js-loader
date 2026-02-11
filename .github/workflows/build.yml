@@ -31,17 +31,23 @@ jobs:
       - name: Collect artifacts
         shell: bash
         run: |
-          mkdir -p dist
+          mkdir -p dist/nexus_js_loader/locales
           cp build/nexus_js_loader.dll dist/
-          cp build/nexus_js_subprocess.exe dist/
-          cp build/libcef.dll dist/
-          cp build/chrome_elf.dll dist/
-          cp build/v8_context_snapshot.bin dist/
-          cp build/icudtl.dat dist/
-          cp build/chrome_100_percent.pak dist/
-          cp build/chrome_200_percent.pak dist/
-          cp build/resources.pak dist/
-          cp -r build/locales dist/
+          cp build/nexus_js_subprocess.exe dist/nexus_js_loader/
+          # CEF core DLLs
+          CEF=third_party/cef/cef_dist
+          for f in libcef.dll chrome_elf.dll v8_context_snapshot.bin \
+                   d3dcompiler_47.dll libEGL.dll libGLESv2.dll \
+                   vk_swiftshader.dll vulkan-1.dll dxcompiler.dll dxil.dll; do
+            [ -f "$CEF/Release/$f" ] && cp "$CEF/Release/$f" dist/nexus_js_loader/
+          done
+          [ -f "$CEF/Release/vk_swiftshader_icd.json" ] && \
+            cp "$CEF/Release/vk_swiftshader_icd.json" dist/nexus_js_loader/
+          # CEF resources
+          for f in icudtl.dat chrome_100_percent.pak chrome_200_percent.pak resources.pak; do
+            cp "$CEF/Resources/$f" dist/nexus_js_loader/
+          done
+          cp -r "$CEF/Resources/locales/"* dist/nexus_js_loader/locales/
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
