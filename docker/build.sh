@@ -16,35 +16,44 @@ echo "Build type:  $BUILD_TYPE"
 echo "Docker image: $DOCKER_IMAGE"
 echo ""
 
-# Write a batch file that cmake will execute inside Wine.
-# The project is mounted at /project (Linux) = Z:\project (Wine).
-BATCH_FILE="$PROJECT_DIR/build.bat"
-
-cat > "$BATCH_FILE" <<EOF
-@echo off
-call C:\\x64.bat
-cmake.exe -G Ninja -B Z:\\project\\build -S Z:\\project -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
-EOF
-
 docker run --rm \
     --platform linux/amd64 \
     -v "$PROJECT_DIR:/project" \
     --entrypoint /bin/bash \
     "$DOCKER_IMAGE" \
     -c '
-        # Configure step
-        wine64 cmd /c Z:\\project\\build.bat
+        set -e
 
-        # Fix Wine/Rosetta null-byte corruption in Ninja build files
-        find /project/build -name "build.ninja" -exec sed -i "s/\x00//g" {} +
+        echo "=== Step 1: CMake Configure ==="
+        # Write batch file for cmake configure
+        cat > /home/wine/.wine/drive_c/configure.bat << "BATEOF"
+@echo off
+call C:\x64.bat
+cmake.exe -G Ninja -B Z:\project\build -S Z:\project -DCMAKE_BUILD_TYPE='"${BUILD_TYPE}"'
+BATEOF
+        wine64 cmd /c C:\\configure.bat
 
-        # Build step
-        wine64 cmd /c "C:\x64.bat && cmake.exe --build Z:\project\build --config '"${BUILD_TYPE}"'"
+        echo ""
+        echo "=== Step 2: Fix Wine/Rosetta null-byte corruption ==="
+        find /project/build -name "*.ninja" -exec sed -i "s/\x00//g" {} +
+
+        echo ""
+        echo "=== Step 3: Generate compile database ==="
+        # Generate compile commands database from ninja
+        cat > /home/wine/.wine/drive_c/compdb.bat << "BATEOF"
+@echo off
+call C:\x64.bat
+cd /d Z:\project\build
+C:\Tools\Ninja\ninja.exe -t compdb > C:\compdb.json
+BATEOF
+        wine64 cmd /c C:\\compdb.bat
+
+        echo ""
+        echo "=== Step 4: Build using wine_build.py ==="
+        python3 /project/docker/wine_build.py
     '
-
-rm -f "$BATCH_FILE"
 
 echo ""
 echo "=== Build complete ==="
 echo "Output: $PROJECT_DIR/build/"
-ls -la "$PROJECT_DIR/build/"*.dll "$PROJECT_DIR/build/"*.exe 2>/dev/null || echo "(check build/ for output files)"
+ls -la "$PROJECT_DIR/build/"*.dll "$PROJECT_DIR/build/"*.exe "$PROJECT_DIR/build/"*.lib 2>/dev/null || echo "(check build/ for output files)"

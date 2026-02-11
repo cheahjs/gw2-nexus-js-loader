@@ -52,6 +52,13 @@ set(SHARED_SOURCES
 # ============================================================================
 # Main plugin DLL (browser process)
 # ============================================================================
+set(IMGUI_SOURCES
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_widgets.cpp
+)
+
 set(PLUGIN_SOURCES
     src/plugin/main.cpp
     src/plugin/globals.h
@@ -76,7 +83,7 @@ set(PLUGIN_SOURCES
     src/plugin/web_app_manager.cpp
 )
 
-add_library(nexus_js_loader SHARED ${PLUGIN_SOURCES} ${SHARED_SOURCES})
+add_library(nexus_js_loader SHARED ${PLUGIN_SOURCES} ${IMGUI_SOURCES} ${SHARED_SOURCES})
 
 target_include_directories(nexus_js_loader PRIVATE
     "${CMAKE_SOURCE_DIR}/src"
