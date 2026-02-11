@@ -28,6 +28,8 @@ target_compile_definitions(libcef_dll_wrapper PRIVATE
     WRAPPING_CEF_SHARED
     _WIN32
     _WINDOWS
+    UNICODE
+    _UNICODE
     __STDC_CONSTANT_MACROS
     __STDC_FORMAT_MACROS
     _HAS_EXCEPTIONS=0

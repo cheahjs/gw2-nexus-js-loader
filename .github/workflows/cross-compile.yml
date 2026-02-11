@@ -21,6 +21,10 @@ jobs:
 
       - name: Build with Docker (Wine + MSVC)
         run: |
+          # Pre-create build directory structure from host to work around
+          # Wine/CMake inability to create directories on bind-mounted volumes
+          mkdir -p "${{ github.workspace }}/build/CMakeFiles/pkgRedirects"
+
           cat > build.bat <<'BATCH'
           @echo off
           call C:\x64.bat
