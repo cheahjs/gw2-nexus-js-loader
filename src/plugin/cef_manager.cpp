@@ -1,0 +1,114 @@
+#include "cef_manager.h"
+#include "globals.h"
+#include "browser_app.h"
+#include "browser_client.h"
+#include "shared/version.h"
+
+#include "include/cef_app.h"
+#include "include/cef_browser.h"
+#include "include/cef_command_line.h"
+
+#include <string>
+
+namespace CefManager {
+
+static CefRefPtr<BrowserApp>    s_app;
+static CefRefPtr<BrowserClient> s_client;
+static CefRefPtr<CefBrowser>    s_browser;
+static bool                     s_initialized = false;
+
+bool Initialize() {
+    if (s_initialized) return true;
+
+    // Determine subprocess path (same directory as DLL)
+    std::string subprocessPath = std::string(Globals::GetDllDirectory()) + "\\nexus_js_subprocess.exe";
+
+    CefMainArgs mainArgs(Globals::HModule);
+
+    s_app = new BrowserApp();
+
+    CefSettings settings = {};
+    settings.size = sizeof(CefSettings);
+    settings.no_sandbox = true;
+    settings.multi_threaded_message_loop = false;
+    settings.windowless_rendering_enabled = true;
+
+    CefString(&settings.browser_subprocess_path).FromString(subprocessPath);
+
+    // Set cache path to addon directory
+    std::string cachePath = std::string(Globals::GetDllDirectory()) + "\\cef_cache";
+    CefString(&settings.cache_path).FromString(cachePath);
+
+    // Set log file
+    std::string logPath = std::string(Globals::GetDllDirectory()) + "\\cef_debug.log";
+    CefString(&settings.log_file).FromString(logPath);
+    settings.log_severity = LOGSEVERITY_WARNING;
+
+    if (!CefInitialize(mainArgs, settings, s_app, nullptr)) {
+        if (Globals::API) {
+            Globals::API->Log(LOGL_CRITICAL, ADDON_NAME, "CefInitialize failed!");
+        }
+        return false;
+    }
+
+    s_initialized = true;
+    return true;
+}
+
+void DoMessageLoopWork() {
+    if (s_initialized) {
+        CefDoMessageLoopWork();
+    }
+}
+
+bool CreateBrowser(const std::string& url, int width, int height) {
+    if (!s_initialized) return false;
+
+    s_client = new BrowserClient(width, height);
+
+    CefWindowInfo windowInfo;
+    windowInfo.SetAsWindowless(nullptr);
+
+    CefBrowserSettings browserSettings = {};
+    browserSettings.size = sizeof(CefBrowserSettings);
+    browserSettings.windowless_frame_rate = 60;
+
+    s_browser = CefBrowserHost::CreateBrowserSync(
+        windowInfo, s_client, url, browserSettings, nullptr, nullptr);
+
+    if (!s_browser) {
+        if (Globals::API) {
+            Globals::API->Log(LOGL_CRITICAL, ADDON_NAME, "CreateBrowserSync failed!");
+        }
+        return false;
+    }
+
+    return true;
+}
+
+void ResizeBrowser(int width, int height) {
+    if (s_client) {
+        s_client->SetSize(width, height);
+    }
+    if (s_browser && s_browser->GetHost()) {
+        s_browser->GetHost()->WasResized();
+    }
+}
+
+void Shutdown() {
+    if (!s_initialized) return;
+
+    // Close browser
+    if (s_browser) {
+        s_browser->GetHost()->CloseBrowser(true);
+        s_browser = nullptr;
+    }
+
+    s_client = nullptr;
+    s_app = nullptr;
+
+    CefShutdown();
+    s_initialized = false;
+}
+
+} // namespace CefManager

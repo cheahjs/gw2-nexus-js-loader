@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS Loader - Example Web App</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>GW2 Nexus JS Loader</h1>
+        <p class="subtitle">Example Web App</p>
+
+        <div class="section">
+            <h2>Logging</h2>
+            <div class="controls">
+                <input type="text" id="logChannel" placeholder="Channel" value="ExampleApp">
+                <input type="text" id="logMessage" placeholder="Message" value="Hello from JS!">
+                <button onclick="testLog()">Log Info</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Alert</h2>
+            <div class="controls">
+                <input type="text" id="alertMessage" placeholder="Alert message" value="Hello from JS Loader!">
+                <button onclick="testAlert()">Send Alert</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Events</h2>
+            <div class="controls">
+                <input type="text" id="eventName" placeholder="Event name" value="MY_CUSTOM_EVENT">
+                <button onclick="subscribeEvent()">Subscribe</button>
+                <button onclick="raiseEvent()">Raise</button>
+            </div>
+            <div id="eventLog" class="log"></div>
+        </div>
+
+        <div class="section">
+            <h2>Data Links</h2>
+            <div class="controls">
+                <button onclick="getMumbleLink()">Get Mumble Link</button>
+                <button onclick="getNexusLink()">Get Nexus Link</button>
+            </div>
+            <pre id="dataLinkOutput" class="output"></pre>
+        </div>
+
+        <div class="section">
+            <h2>Paths</h2>
+            <div class="controls">
+                <button onclick="getGameDir()">Game Dir</button>
+                <button onclick="getAddonDir()">Addon Dir</button>
+                <button onclick="getCommonDir()">Common Dir</button>
+            </div>
+            <pre id="pathsOutput" class="output"></pre>
+        </div>
+
+        <div class="section">
+            <h2>Keybinds</h2>
+            <div class="controls">
+                <input type="text" id="keybindId" placeholder="Keybind ID" value="KB_EXAMPLE_ACTION">
+                <input type="text" id="keybindDefault" placeholder="Default bind" value="CTRL+SHIFT+E">
+                <button onclick="registerKeybind()">Register</button>
+                <button onclick="deregisterKeybind()">Deregister</button>
+            </div>
+            <div id="keybindLog" class="log"></div>
+        </div>
+
+        <div class="section">
+            <h2>Game Binds</h2>
+            <div class="controls">
+                <select id="gameBind">
+                    <option value="9">Jump (9)</option>
+                    <option value="6">Dodge (6)</option>
+                    <option value="0">Move Forward (0)</option>
+                    <option value="17">Weapon Swap (17)</option>
+                </select>
+                <button onclick="pressGameBind()">Press</button>
+                <button onclick="releaseGameBind()">Release</button>
+                <button onclick="checkIsBound()">Is Bound?</button>
+            </div>
+            <pre id="gameBindOutput" class="output"></pre>
+        </div>
+
+        <div class="section">
+            <h2>Quick Access</h2>
+            <div class="controls">
+                <button onclick="addQuickAccess()">Add Shortcut</button>
+                <button onclick="removeQuickAccess()">Remove Shortcut</button>
+                <button onclick="notifyQuickAccess()">Notify</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Localization</h2>
+            <div class="controls">
+                <input type="text" id="locId" placeholder="ID" value="EXAMPLE_GREETING">
+                <input type="text" id="locLang" placeholder="Language" value="en">
+                <input type="text" id="locText" placeholder="Text" value="Hello World">
+                <button onclick="setLocalization()">Set</button>
+                <button onclick="translateLocalization()">Translate</button>
+            </div>
+            <pre id="locOutput" class="output"></pre>
+        </div>
+
+        <div id="statusBar" class="status-bar">Ready</div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
