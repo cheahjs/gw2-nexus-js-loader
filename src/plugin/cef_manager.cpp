@@ -22,8 +22,46 @@ bool Initialize() {
 
     const char* cefDir = Globals::GetCefDirectory();
 
+    if (Globals::API) {
+        Globals::API->Log(LOGL_INFO, ADDON_NAME,
+            (std::string("CEF directory: ") + cefDir).c_str());
+    }
+
     // Subprocess lives in the CEF subfolder
     std::string subprocessPath = std::string(cefDir) + "\\nexus_js_subprocess.exe";
+
+    // Log file existence checks for debugging
+    if (Globals::API) {
+        auto fileExists = [](const std::string& path) -> bool {
+            DWORD attr = GetFileAttributesA(path.c_str());
+            return attr != INVALID_FILE_ATTRIBUTES;
+        };
+
+        const char* requiredFiles[] = {
+            "\\libcef.dll",
+            "\\nexus_js_subprocess.exe",
+            "\\icudtl.dat",
+            "\\v8_context_snapshot.bin",
+            "\\chrome_elf.dll",
+            "\\locales\\en-US.pak",
+        };
+        for (const char* file : requiredFiles) {
+            std::string fullPath = std::string(cefDir) + file;
+            Globals::API->Log(
+                fileExists(fullPath) ? LOGL_INFO : LOGL_WARNING,
+                ADDON_NAME,
+                (std::string(fileExists(fullPath) ? "Found: " : "MISSING: ") + file).c_str());
+        }
+
+        // Check if libcef.dll is already loaded by GW2
+        HMODULE existingCef = GetModuleHandleA("libcef.dll");
+        if (existingCef) {
+            char existingPath[MAX_PATH] = {};
+            GetModuleFileNameA(existingCef, existingPath, MAX_PATH);
+            Globals::API->Log(LOGL_WARNING, ADDON_NAME,
+                (std::string("libcef.dll already loaded from: ") + existingPath).c_str());
+        }
+    }
 
     CefMainArgs mainArgs(Globals::HModule);
 
@@ -50,7 +88,7 @@ bool Initialize() {
 
     std::string logPath = std::string(cefDir) + "\\cef_debug.log";
     CefString(&settings.log_file).FromString(logPath);
-    settings.log_severity = LOGSEVERITY_WARNING;
+    settings.log_severity = LOGSEVERITY_INFO;
 
     // Ensure libcef.dll's transitive dependencies can be found in the subfolder
     SetDllDirectoryA(cefDir);
@@ -58,6 +96,8 @@ bool Initialize() {
     if (!CefInitialize(mainArgs, settings, s_app, nullptr)) {
         if (Globals::API) {
             Globals::API->Log(LOGL_CRITICAL, ADDON_NAME, "CefInitialize failed!");
+            Globals::API->Log(LOGL_CRITICAL, ADDON_NAME,
+                (std::string("Check CEF log at: ") + logPath).c_str());
         }
         return false;
     }
