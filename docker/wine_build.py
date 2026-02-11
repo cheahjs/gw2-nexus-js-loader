@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
 Build helper for Wine/Rosetta environments where ninja can't spawn subprocesses.
-Reads the compile database from ninja and executes commands sequentially.
+Reads the compile database from ninja and executes commands in parallel.
 Then runs the link commands using response files for long command lines.
 """
+import argparse
 import json
 import subprocess
 import sys
 import os
 import glob
+import concurrent.futures
+import threading
 
 
 BUILD_DIR_WIN = "Z:\\project\\build"
@@ -34,42 +37,80 @@ def run_wine_bat(bat_linux_path, bat_win_path, content, timeout=120):
     return result
 
 
-def compile_all(compdb_linux):
-    """Compile all entries from the compile database."""
+def compile_one(index, entry, total, progress_lock, progress_counter, failed_counter,
+                failed_outputs, abort_event):
+    """Compile a single entry. Called from thread pool workers."""
+    if abort_event.is_set():
+        return
+
+    cmd = entry["command"]
+    directory = entry.get("directory", BUILD_DIR_WIN)
+    output = entry.get("output", "?")
+
+    # Each thread gets its own batch file to avoid write conflicts
+    bat_name = f"compile_cmd_{index}.bat"
+    bat_path_linux = os.path.join(DRIVE_C, bat_name)
+    bat_path_win = f"C:\\{bat_name}"
+
+    bat_content = f"@echo off\ncall C:\\x64.bat\ncd /d {directory}\n{cmd}\n"
+    result = run_wine_bat(bat_path_linux, bat_path_win, bat_content)
+
+    with progress_lock:
+        progress_counter[0] += 1
+        n = progress_counter[0]
+
+    if result.returncode != 0:
+        with progress_lock:
+            failed_counter[0] += 1
+            failed_outputs.append(output)
+            current_failed = failed_counter[0]
+        print(f"[{n}/{total}] FAILED {output} (exit {result.returncode})")
+        if result.stderr:
+            print(result.stderr[:500])
+        if result.stdout:
+            print(result.stdout[:500])
+        if current_failed > 10:
+            abort_event.set()
+    else:
+        print(f"[{n}/{total}] {output}")
+
+
+def compile_all(compdb_linux, jobs):
+    """Compile all entries from the compile database using parallel workers."""
     with open(compdb_linux) as f:
         commands = json.load(f)
 
     compile_cmds = [c for c in commands if c.get("command", "").strip()]
     total = len(compile_cmds)
-    print(f"Compiling {total} targets...")
+    print(f"Compiling {total} targets with {jobs} parallel workers...")
 
-    failed = 0
+    progress_lock = threading.Lock()
+    progress_counter = [0]  # mutable counter shared across threads
+    failed_counter = [0]
     failed_outputs = []
-    bat_path_linux = os.path.join(DRIVE_C, "compile_cmd.bat")
-    bat_path_win = "C:\\compile_cmd.bat"
+    abort_event = threading.Event()
 
-    for i, entry in enumerate(compile_cmds):
-        cmd = entry["command"]
-        directory = entry.get("directory", BUILD_DIR_WIN)
-        output = entry.get("output", "?")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as executor:
+        futures = []
+        for i, entry in enumerate(compile_cmds):
+            if abort_event.is_set():
+                break
+            fut = executor.submit(
+                compile_one, i, entry, total,
+                progress_lock, progress_counter, failed_counter,
+                failed_outputs, abort_event,
+            )
+            futures.append(fut)
 
-        print(f"[{i+1}/{total}] {output}")
+        # Wait for all submitted futures to complete
+        for fut in concurrent.futures.as_completed(futures):
+            fut.result()  # propagate exceptions
 
-        bat_content = f"@echo off\ncall C:\\x64.bat\ncd /d {directory}\n{cmd}\n"
-        result = run_wine_bat(bat_path_linux, bat_path_win, bat_content)
+    if abort_event.is_set():
+        print("Too many failures, stopping.")
+        sys.exit(1)
 
-        if result.returncode != 0:
-            print(f"  FAILED (exit {result.returncode})")
-            if result.stderr:
-                print(result.stderr[:500])
-            if result.stdout:
-                print(result.stdout[:500])
-            failed += 1
-            failed_outputs.append(output)
-            if failed > 10:
-                print("Too many failures, stopping.")
-                sys.exit(1)
-
+    failed = failed_counter[0]
     print(f"\nCompilation: {total - failed}/{total} succeeded, {failed} failed")
     if failed_outputs:
         print("Failed files:")
@@ -208,9 +249,14 @@ def link_dll():
 
 
 def main():
-    link_only = "--link-only" in sys.argv
+    parser = argparse.ArgumentParser(description="Wine/MSVC build helper")
+    parser.add_argument("--link-only", action="store_true",
+                        help="Skip compilation, only run link steps")
+    parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count(),
+                        help="Number of parallel compile workers (default: CPU count)")
+    args = parser.parse_args()
 
-    if not link_only:
+    if not args.link_only:
         compdb_linux = os.path.join(DRIVE_C, "compdb.json")
 
         if not os.path.exists(compdb_linux):
@@ -218,7 +264,7 @@ def main():
             sys.exit(1)
 
         # Step 1: Compile all source files
-        compile_failures = compile_all(compdb_linux)
+        compile_failures = compile_all(compdb_linux, args.jobs)
     else:
         print("=== Link-only mode (skipping compilation) ===")
         compile_failures = 0
