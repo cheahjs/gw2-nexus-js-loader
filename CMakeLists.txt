@@ -170,6 +170,7 @@ target_compile_options(nexus_js_cef_host PRIVATE
     /W3
     /EHsc
     /MT
+    /Od
 )
 
 target_link_options(nexus_js_cef_host PRIVATE
