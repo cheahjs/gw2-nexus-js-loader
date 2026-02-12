@@ -55,7 +55,7 @@ BATEOF
 
         echo ""
         echo "=== Step 4: Build using wine_build.py ==="
-        python3 /project/docker/wine_build.py
+        python3 /project/docker/wine_build.py -j4
     '
 
 echo ""

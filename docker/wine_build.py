@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Build helper for Wine/Rosetta environments where ninja can't spawn subprocesses.
+Build helper for Wine/Rosetta environments where ninja can't reliably spawn
+subprocesses (Rosetta intermittently kills Wine child processes with GDT
+selector errors, causing ninja to silently produce incomplete builds).
+
 Reads the compile database from ninja and executes commands in parallel.
+Supports incremental builds by skipping .obj files newer than their source.
 Then runs the link commands using response files for long command lines.
 """
 import argparse
@@ -75,13 +79,53 @@ def compile_one(index, entry, total, progress_lock, progress_counter, failed_cou
         print(f"[{n}/{total}] {output}")
 
 
+def win_to_linux_path(win_path):
+    """Convert a Windows path (Z:\\project\\...) to a Linux path (/project/...)."""
+    p = win_path.replace("\\", "/")
+    if p.startswith("Z:/") or p.startswith("z:/"):
+        p = p[2:]
+    return p
+
+
+def is_up_to_date(entry):
+    """Check if an .obj file is newer than its source file (incremental build)."""
+    output = entry.get("output", "")
+    source = entry.get("file", "")
+    if not output or not source:
+        return False
+
+    # Output is relative to the build directory
+    obj_path = os.path.join(BUILD_DIR_LINUX, output.replace("\\", "/"))
+    src_path = win_to_linux_path(source)
+
+    try:
+        obj_mtime = os.path.getmtime(obj_path)
+        src_mtime = os.path.getmtime(src_path)
+        return obj_mtime > src_mtime
+    except OSError:
+        return False
+
+
 def compile_all(compdb_linux, jobs):
     """Compile all entries from the compile database using parallel workers."""
     with open(compdb_linux) as f:
         commands = json.load(f)
 
-    compile_cmds = [c for c in commands if c.get("command", "").strip()]
+    compile_cmds = [c for c in commands
+                    if c.get("command", "").strip()
+                    and c.get("output", "").endswith(".obj")]
+
+    # Incremental build: skip entries where .obj is newer than source
+    stale = [c for c in compile_cmds if not is_up_to_date(c)]
+    skipped = len(compile_cmds) - len(stale)
+    if skipped > 0:
+        print(f"Skipping {skipped}/{len(compile_cmds)} up-to-date targets")
+    compile_cmds = stale
+
     total = len(compile_cmds)
+    if total == 0:
+        print("All targets up to date, nothing to compile.")
+        return 0
     print(f"Compiling {total} targets with {jobs} parallel workers...")
 
     progress_lock = threading.Lock()
@@ -285,6 +329,26 @@ def main():
 
     if compile_failures > 0:
         print(f"\n{compile_failures} non-critical compile failure(s), continuing to link...")
+
+    # Check if link outputs already exist and no sources were recompiled
+    link_outputs = ["libcef_dll_wrapper.lib", "nexus_js_subprocess.exe", "nexus_js_loader.dll"]
+    all_exist = all(os.path.exists(os.path.join(BUILD_DIR_LINUX, f)) for f in link_outputs)
+    if all_exist and compile_failures == 0 and not args.link_only:
+        # Check if any .obj is newer than the final outputs
+        dll_mtime = os.path.getmtime(os.path.join(BUILD_DIR_LINUX, "nexus_js_loader.dll"))
+        any_newer = False
+        for subdir in ["CMakeFiles/nexus_js_loader.dir", "CMakeFiles/nexus_js_subprocess.dir",
+                        "CMakeFiles/libcef_dll_wrapper.dir"]:
+            for obj_linux in glob.glob(os.path.join(BUILD_DIR_LINUX, subdir, "**/*.obj"), recursive=True):
+                if os.path.getmtime(obj_linux) > dll_mtime:
+                    any_newer = True
+                    break
+            if any_newer:
+                break
+        if not any_newer:
+            print("\nAll outputs up to date, skipping link steps.")
+            print("\nBuild succeeded! (nothing to do)")
+            return
 
     # Step 2: Create static library
     if not link_static_lib():
