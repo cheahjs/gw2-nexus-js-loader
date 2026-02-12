@@ -8,6 +8,7 @@
 #include "plugin/ipc_handler.h"
 #include "plugin/web_app_manager.h"
 #include "plugin/in_process_browser.h"
+#include "imgui.h"
 
 // Forward declarations for Nexus callbacks
 void AddonLoad(AddonAPI_t* aAPI);
@@ -58,6 +59,14 @@ void AddonLoad(AddonAPI_t* aAPI) {
 
     aAPI->Log(LOGL_INFO, ADDON_NAME, "Loading JS Loader (in-process CEF)...");
 
+    // Set ImGui context and allocators to match Nexus.
+    // Our DLL compiles its own ImGui 1.80 (matching Nexus's version).
+    // We must share the same context and memory allocator.
+    ImGui::SetCurrentContext(static_cast<ImGuiContext*>(aAPI->ImguiContext));
+    ImGui::SetAllocatorFunctions(
+        reinterpret_cast<void*(*)(size_t, void*)>(aAPI->ImguiMalloc),
+        reinterpret_cast<void(*)(void*, void*)>(aAPI->ImguiFree));
+
     // Register render callbacks (needed even before CEF is available for polling)
     aAPI->GUI_Register(RT_PreRender, OnPreRender);
     aAPI->GUI_Register(RT_Render, OnRender);
@@ -70,7 +79,7 @@ void AddonLoad(AddonAPI_t* aAPI) {
     aAPI->InputBinds_RegisterWithString(
         "KB_JSLOADER_TOGGLE",
         OnToggleOverlay,
-        "ALT+SHIFT+J"
+        "ALT+SHIFT+L"
     );
 
     // CEF browser creation is always deferred to OnPreRender.

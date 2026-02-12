@@ -95,8 +95,41 @@ def win_to_linux_path(win_path):
     return p
 
 
+def _get_max_header_mtime():
+    """Return the newest mtime of any header in project include directories.
+
+    This is used to force recompilation when headers change but source files
+    don't (e.g. replacing ImGui version).  Cached after first call.
+    """
+    if hasattr(_get_max_header_mtime, "_cached"):
+        return _get_max_header_mtime._cached
+
+    header_dirs = [
+        "/project/third_party/imgui",
+        "/project/third_party/nexus-api",
+        "/project/src/plugin",
+        "/project/src/shared",
+    ]
+    max_mtime = 0.0
+    for d in header_dirs:
+        for h in glob.glob(os.path.join(d, "**/*.h"), recursive=True):
+            try:
+                mt = os.path.getmtime(h)
+                if mt > max_mtime:
+                    max_mtime = mt
+            except OSError:
+                pass
+    _get_max_header_mtime._cached = max_mtime
+    return max_mtime
+
+
 def is_up_to_date(entry):
-    """Check if an .obj file is newer than its source file (incremental build)."""
+    """Check if an .obj file is newer than its source file (incremental build).
+
+    Also checks project header directories — if any header is newer than the
+    .obj, the target is considered stale.  This catches header-only changes
+    like updating the ImGui version.
+    """
     output = entry.get("output", "")
     source = entry.get("file", "")
     if not output or not source:
@@ -109,9 +142,19 @@ def is_up_to_date(entry):
     try:
         obj_mtime = os.path.getmtime(obj_path)
         src_mtime = os.path.getmtime(src_path)
-        return obj_mtime > src_mtime
+        if obj_mtime <= src_mtime:
+            return False
     except OSError:
         return False
+
+    # For plugin targets (not CEF wrapper), also check if any project header
+    # is newer than the .obj.  CEF wrapper only depends on CEF headers which
+    # are downloaded once and don't change.
+    if "libcef_dll_wrapper" not in output:
+        if obj_mtime <= _get_max_header_mtime():
+            return False
+
+    return True
 
 
 def compile_all(compdb_linux, jobs):

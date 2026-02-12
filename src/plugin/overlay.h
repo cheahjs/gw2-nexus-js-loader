@@ -9,7 +9,17 @@ void Render();
 // Render the options/settings panel. Call from RT_OptionsRender.
 void RenderOptions();
 
-// Get the current overlay window position (for coordinate transforms).
+// Get the content area position (where the CEF texture starts).
 void GetOverlayPosition(float& x, float& y);
+
+// Whether the overlay window had ImGui focus last frame.
+bool HasFocus();
+
+// Hit-test a point (in client coordinates) against the full overlay window
+// bounds (including title bar).
+bool HitTest(int clientX, int clientY);
+
+// Hit-test a point against the content area only (where the CEF texture is).
+bool ContentHitTest(int clientX, int clientY);
 
 } // namespace Overlay
