@@ -247,8 +247,42 @@ def link_subprocess():
         return True
 
 
+def link_cef_host():
+    """Link nexus_js_cef_host.exe."""
+    print("\n=== Linking nexus_js_cef_host.exe ===")
+
+    host_objs = find_obj_files("CMakeFiles/nexus_js_cef_host.dir")
+    if not host_objs:
+        print("ERROR: No CEF host .obj files found!")
+        return False
+
+    print(f"  Found {len(host_objs)} object files")
+    obj_list = " ".join(f'"{o}"' for o in host_objs)
+
+    bat_linux = os.path.join(DRIVE_C, "link_cmd.bat")
+    bat_content = (
+        f"@echo off\n"
+        f"call C:\\x64.bat\n"
+        f"cd /d {BUILD_DIR_WIN}\n"
+        f"link.exe /nologo /machine:x64 /INCREMENTAL:NO /subsystem:console "
+        f"/OUT:nexus_js_cef_host.exe "
+        f"{obj_list} "
+        f"libcef_dll_wrapper.lib "
+        f"{CEF_LIB} "
+        f"{SYSTEM_LIBS}\n"
+    )
+
+    result = run_wine_bat(bat_linux, "C:\\link_cmd.bat", bat_content, timeout=300)
+    if result.returncode != 0:
+        print(f"  FAILED: {result.stderr[:500]} {result.stdout[:500]}")
+        return False
+    else:
+        print("  OK")
+        return True
+
+
 def link_dll():
-    """Link nexus_js_loader.dll."""
+    """Link nexus_js_loader.dll (no CEF linkage — uses out-of-process host)."""
     print("\n=== Linking nexus_js_loader.dll ===")
 
     dll_objs = find_obj_files("CMakeFiles/nexus_js_loader.dir")
@@ -264,12 +298,9 @@ def link_dll():
     with open(rsp_linux, "w") as f:
         for obj in dll_objs:
             f.write(f'"{obj}"\n')
-        # Add libraries
-        f.write("libcef_dll_wrapper.lib\n")
-        f.write(f"{CEF_LIB}\n")
+        # Add libraries (no CEF — it runs out-of-process now)
         f.write("d3d11.lib\n")
         f.write("dxgi.lib\n")
-        f.write("delayimp.lib\n")
         for lib in SYSTEM_LIBS.split():
             f.write(f"{lib}\n")
 
@@ -279,7 +310,6 @@ def link_dll():
         f"call C:\\x64.bat\n"
         f"cd /d {BUILD_DIR_WIN}\n"
         f"link.exe /nologo /machine:x64 /INCREMENTAL:NO /DLL "
-        f"/DELAYLOAD:libcef.dll "
         f"/OUT:nexus_js_loader.dll "
         f"/IMPLIB:nexus_js_loader.lib "
         f"@{rsp_win}\n"
@@ -319,26 +349,31 @@ def main():
     # cef_util_win.cc). Continue to linking as long as project source files compiled.
     project_objs = find_obj_files("CMakeFiles/nexus_js_loader.dir")
     sub_objs = find_obj_files("CMakeFiles/nexus_js_subprocess.dir")
+    host_objs = find_obj_files("CMakeFiles/nexus_js_cef_host.dir")
 
-    if len(project_objs) < 12:  # We expect 12 plugin obj files (including delay_load_hook)
+    if len(project_objs) < 11:  # We expect 11 plugin obj files
         print(f"\nERROR: Only {len(project_objs)} plugin obj files found (expected 11)")
         sys.exit(1)
     if len(sub_objs) < 4:  # We expect 4 subprocess obj files
         print(f"\nERROR: Only {len(sub_objs)} subprocess obj files found (expected 4)")
+        sys.exit(1)
+    if len(host_objs) < 6:  # We expect 6 host obj files
+        print(f"\nERROR: Only {len(host_objs)} CEF host obj files found (expected 6)")
         sys.exit(1)
 
     if compile_failures > 0:
         print(f"\n{compile_failures} non-critical compile failure(s), continuing to link...")
 
     # Check if link outputs already exist and no sources were recompiled
-    link_outputs = ["libcef_dll_wrapper.lib", "nexus_js_subprocess.exe", "nexus_js_loader.dll"]
+    link_outputs = ["libcef_dll_wrapper.lib", "nexus_js_subprocess.exe",
+                    "nexus_js_cef_host.exe", "nexus_js_loader.dll"]
     all_exist = all(os.path.exists(os.path.join(BUILD_DIR_LINUX, f)) for f in link_outputs)
     if all_exist and compile_failures == 0 and not args.link_only:
         # Check if any .obj is newer than the final outputs
         dll_mtime = os.path.getmtime(os.path.join(BUILD_DIR_LINUX, "nexus_js_loader.dll"))
         any_newer = False
         for subdir in ["CMakeFiles/nexus_js_loader.dir", "CMakeFiles/nexus_js_subprocess.dir",
-                        "CMakeFiles/libcef_dll_wrapper.dir"]:
+                        "CMakeFiles/nexus_js_cef_host.dir", "CMakeFiles/libcef_dll_wrapper.dir"]:
             for obj_linux in glob.glob(os.path.join(BUILD_DIR_LINUX, subdir, "**/*.obj"), recursive=True):
                 if os.path.getmtime(obj_linux) > dll_mtime:
                     any_newer = True
@@ -355,19 +390,25 @@ def main():
         print("\nFATAL: Failed to create libcef_dll_wrapper.lib")
         sys.exit(1)
 
-    # Step 3: Link subprocess exe (must be before DLL)
+    # Step 3: Link subprocess exe
     if not link_subprocess():
         print("\nFATAL: Failed to link nexus_js_subprocess.exe")
         sys.exit(1)
 
-    # Step 4: Link main DLL
+    # Step 4: Link CEF host exe
+    if not link_cef_host():
+        print("\nFATAL: Failed to link nexus_js_cef_host.exe")
+        sys.exit(1)
+
+    # Step 5: Link main DLL (no CEF linkage)
     if not link_dll():
         print("\nFATAL: Failed to link nexus_js_loader.dll")
         sys.exit(1)
 
-    # Step 5: Verify outputs exist
+    # Step 6: Verify outputs exist
     print("\n=== Verifying outputs ===")
-    outputs = ["libcef_dll_wrapper.lib", "nexus_js_subprocess.exe", "nexus_js_loader.dll"]
+    outputs = ["libcef_dll_wrapper.lib", "nexus_js_subprocess.exe",
+               "nexus_js_cef_host.exe", "nexus_js_loader.dll"]
     all_ok = True
     for out in outputs:
         path = os.path.join(BUILD_DIR_LINUX, out)
@@ -378,11 +419,23 @@ def main():
             print(f"  {out}: MISSING!")
             all_ok = False
 
-    if all_ok:
-        print("\nBuild succeeded!")
-    else:
+    if not all_ok:
         print("\nBuild FAILED - some outputs are missing")
         sys.exit(1)
+
+    # Step 7: Copy executables into nexus_js_loader/ subfolder
+    #         (mirrors the CMake post-build commands that ninja would run)
+    print("\n=== Copying executables to subfolder ===")
+    subfolder = os.path.join(BUILD_DIR_LINUX, "nexus_js_loader")
+    os.makedirs(subfolder, exist_ok=True)
+    import shutil
+    for exe in ["nexus_js_subprocess.exe", "nexus_js_cef_host.exe"]:
+        src = os.path.join(BUILD_DIR_LINUX, exe)
+        dst = os.path.join(subfolder, exe)
+        shutil.copy2(src, dst)
+        print(f"  {exe} -> nexus_js_loader/{exe}")
+
+    print("\nBuild succeeded!")
 
 
 if __name__ == "__main__":
