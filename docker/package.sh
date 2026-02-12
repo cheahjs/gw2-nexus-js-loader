@@ -23,6 +23,9 @@ mkdir -p "$SUBFOLDER/locales"
 # Main DLL at root
 cp "$BUILD_DIR/nexus_js_loader.dll" "$STAGING/"
 
+# CEF host process in subfolder
+cp "$BUILD_DIR/nexus_js_cef_host.exe" "$SUBFOLDER/"
+
 # Subprocess in subfolder
 cp "$BUILD_DIR/nexus_js_subprocess.exe" "$SUBFOLDER/"
 

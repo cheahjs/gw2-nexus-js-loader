@@ -3,8 +3,6 @@
 #include <string>
 #include <vector>
 
-class OsrRenderHandler;
-
 // Manages web app lifecycle: loading/unloading browsers, scanning addon directories.
 namespace WebAppManager {
 
@@ -19,9 +17,6 @@ void LoadUrl(const std::string& url);
 
 // Reload the current page.
 void Reload();
-
-// Get the OSR render handler for the active browser.
-OsrRenderHandler* GetRenderHandler();
 
 // Get list of loaded web app URLs.
 const std::vector<std::string>& GetLoadedApps();

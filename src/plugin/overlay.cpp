@@ -1,13 +1,9 @@
 #include "overlay.h"
 #include "globals.h"
-#include "cef_manager.h"
+#include "cef_host_proxy.h"
 #include "web_app_manager.h"
-#include "osr_render_handler.h"
 #include "shared/version.h"
 
-// ImGui is provided by Nexus via the ImguiContext pointer.
-// We must set the ImGui context before calling any ImGui functions.
-// The imgui headers should be placed in the project or included from a dependency.
 #include "imgui.h"
 
 namespace Overlay {
@@ -21,14 +17,12 @@ static char s_urlBuffer[2048] = "https://example.com";
 void Render() {
     if (!Globals::OverlayVisible) return;
 
-    auto* renderHandler = WebAppManager::GetRenderHandler();
-    if (!renderHandler) return;
-
-    void* textureHandle = renderHandler->GetTextureHandle();
+    void* textureHandle = CefHostProxy::GetTextureHandle();
     if (!textureHandle) return;
 
-    int texW = renderHandler->GetWidth();
-    int texH = renderHandler->GetHeight();
+    int texW = CefHostProxy::GetWidth();
+    int texH = CefHostProxy::GetHeight();
+    if (texW <= 0 || texH <= 0) return;
 
     // Set ImGui context from Nexus
     ImGui::SetCurrentContext(static_cast<ImGuiContext*>(Globals::API->ImguiContext));
@@ -56,6 +50,7 @@ void RenderOptions() {
 
     ImGui::Text("Overlay toggle: ALT+SHIFT+J");
     ImGui::Text("Status: %s", Globals::OverlayVisible ? "Visible" : "Hidden");
+    ImGui::Text("Host: %s", CefHostProxy::IsReady() ? "Connected" : "Not connected");
 
     ImGui::Separator();
     ImGui::TextUnformatted("Web App URL:");

@@ -2,7 +2,7 @@
 #include "Nexus.h"
 #include "shared/version.h"
 #include "plugin/globals.h"
-#include "plugin/cef_manager.h"
+#include "plugin/cef_host_proxy.h"
 #include "plugin/overlay.h"
 #include "plugin/input_handler.h"
 #include "plugin/web_app_manager.h"
@@ -40,9 +40,9 @@ void AddonLoad(AddonAPI_t* aAPI) {
 
     aAPI->Log(LOGL_INFO, ADDON_NAME, "Loading JS Loader...");
 
-    // Initialize CEF
-    if (!CefManager::Initialize()) {
-        aAPI->Log(LOGL_CRITICAL, ADDON_NAME, "Failed to initialize CEF!");
+    // Initialize CEF host proxy (launches out-of-process CEF host)
+    if (!CefHostProxy::Initialize()) {
+        aAPI->Log(LOGL_CRITICAL, ADDON_NAME, "Failed to initialize CEF host proxy!");
         return;
     }
 
@@ -89,15 +89,15 @@ void AddonUnload() {
     // Shutdown web apps
     WebAppManager::Shutdown();
 
-    // Shutdown CEF (closes browsers, releases refs, calls CefShutdown)
-    CefManager::Shutdown();
+    // Shutdown CEF host proxy (sends SHUTDOWN, waits, terminates)
+    CefHostProxy::Shutdown();
 
     Globals::API->Log(LOGL_INFO, ADDON_NAME, "JS Loader unloaded.");
     Globals::API = nullptr;
 }
 
 void OnPreRender() {
-    CefManager::DoMessageLoopWork();
+    CefHostProxy::Tick();
 }
 
 void OnRender() {

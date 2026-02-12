@@ -1,13 +1,13 @@
 #pragma once
 
 #include "include/cef_render_handler.h"
-#include "d3d11_texture.h"
+#include <cstdint>
 
-// Off-screen render handler: receives pixel buffers from CEF and uploads to D3D11 texture.
-class OsrRenderHandler : public CefRenderHandler {
+// Off-screen render handler for the host process.
+// Writes BGRA pixel buffers from CEF into shared memory (double-buffered).
+class HostOsrRenderHandler : public CefRenderHandler {
 public:
-    OsrRenderHandler(int width, int height);
-    ~OsrRenderHandler();
+    HostOsrRenderHandler(void* shmemView, int width, int height);
 
     // CefRenderHandler
     void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override;
@@ -18,20 +18,17 @@ public:
                  int width,
                  int height) override;
 
-    // Get the D3D11 shader resource view for ImGui rendering
-    void* GetTextureHandle() const;
-
-    // Resize the viewport
+    // Update viewport dimensions
     void SetSize(int width, int height);
 
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
 
 private:
-    int           m_width;
-    int           m_height;
-    D3D11Texture  m_texture;
+    void* m_shmemView;   // Mapped shared memory base pointer
+    int   m_width;
+    int   m_height;
 
-    IMPLEMENT_REFCOUNTING(OsrRenderHandler);
-    DISALLOW_COPY_AND_ASSIGN(OsrRenderHandler);
+    IMPLEMENT_REFCOUNTING(HostOsrRenderHandler);
+    DISALLOW_COPY_AND_ASSIGN(HostOsrRenderHandler);
 };
