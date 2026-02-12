@@ -209,6 +209,7 @@ void OnPreRender() {
 
 void OnRender() {
     Overlay::Render();
+    Overlay::RenderDevTools();
 }
 
 void OnOptionsRender() {

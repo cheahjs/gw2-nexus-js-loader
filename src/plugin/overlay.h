@@ -1,10 +1,15 @@
 #pragma once
 
+class InProcessBrowser;
+
 // Renders the CEF overlay as an ImGui window and the options panel.
 namespace Overlay {
 
 // Render the CEF overlay window. Call from RT_Render.
 void Render();
+
+// Render the DevTools window (if open). Call from RT_Render after Render().
+void RenderDevTools();
 
 // Render the options/settings panel. Call from RT_OptionsRender.
 void RenderOptions();
@@ -21,5 +26,10 @@ bool HitTest(int clientX, int clientY);
 
 // Hit-test a point against the content area only (where the CEF texture is).
 bool ContentHitTest(int clientX, int clientY);
+
+// DevTools window — same hit-testing and position queries.
+void GetDevToolsPosition(float& x, float& y);
+bool DevToolsHasFocus();
+bool DevToolsContentHitTest(int clientX, int clientY);
 
 } // namespace Overlay

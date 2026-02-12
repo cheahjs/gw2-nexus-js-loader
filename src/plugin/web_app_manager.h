@@ -33,10 +33,19 @@ void* GetTextureHandle();
 int GetWidth();
 int GetHeight();
 
+// Resize the browser to the given dimensions.
+void Resize(int width, int height);
+
 // Apply buffered pixel data to D3D11 texture. Call from render thread.
 void FlushFrame();
 
 // Whether the browser is ready for use.
 bool IsReady();
+
+// DevTools — rendered offscreen into a second ImGui window.
+void OpenDevTools();
+void CloseDevTools();
+bool IsDevToolsOpen();
+InProcessBrowser* GetDevToolsBrowser();
 
 } // namespace WebAppManager

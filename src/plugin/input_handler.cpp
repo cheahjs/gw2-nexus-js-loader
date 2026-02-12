@@ -10,14 +10,6 @@
 
 namespace InputHandler {
 
-// Convert screen coordinates to overlay-relative coordinates
-static void ScreenToOverlay(int screenX, int screenY, int& outX, int& outY) {
-    float ox, oy;
-    Overlay::GetOverlayPosition(ox, oy);
-    outX = screenX - static_cast<int>(ox);
-    outY = screenY - static_cast<int>(oy);
-}
-
 // Build modifiers bitmask from current key state
 static uint32_t GetModifiers() {
     uint32_t modifiers = 0;
@@ -27,12 +19,31 @@ static uint32_t GetModifiers() {
     return modifiers;
 }
 
+// Find which browser (main or DevTools) a mouse position targets.
+// Returns the browser and content origin for coordinate conversion.
+static InProcessBrowser* GetMouseTarget(int clientX, int clientY,
+                                         float& contentX, float& contentY) {
+    if (Overlay::ContentHitTest(clientX, clientY)) {
+        Overlay::GetOverlayPosition(contentX, contentY);
+        return WebAppManager::GetBrowser();
+    }
+    if (Overlay::DevToolsContentHitTest(clientX, clientY)) {
+        Overlay::GetDevToolsPosition(contentX, contentY);
+        return WebAppManager::GetDevToolsBrowser();
+    }
+    return nullptr;
+}
+
+// Find which browser should receive keyboard input (whichever has focus).
+static InProcessBrowser* GetKeyboardTarget() {
+    if (Overlay::HasFocus()) return WebAppManager::GetBrowser();
+    if (Overlay::DevToolsHasFocus()) return WebAppManager::GetDevToolsBrowser();
+    return nullptr;
+}
+
 static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     // Nexus convention: return 0 = consumed, non-zero = pass through.
-    if (!WebAppManager::IsReady() || !Globals::OverlayVisible) return uMsg;
-
-    InProcessBrowser* browser = WebAppManager::GetBrowser();
-    if (!browser) return uMsg;
+    if (!Globals::OverlayVisible && !WebAppManager::IsDevToolsOpen()) return uMsg;
 
     uint32_t modifiers = GetModifiers();
 
@@ -40,15 +51,11 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_MOUSEMOVE: {
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
-            // Only consume mouse movement when overlay has focus
-            if (!Overlay::HasFocus()) return uMsg;
-            if (!Overlay::HitTest(clientX, clientY)) return uMsg;
-            // Forward to CEF only if cursor is over the content area
-            if (Overlay::ContentHitTest(clientX, clientY)) {
-                int x, y;
-                ScreenToOverlay(clientX, clientY, x, y);
-                browser->SendMouseMove(x, y, modifiers);
-            }
+            float cx, cy;
+            InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
+            if (!target) return uMsg;
+            target->SendMouseMove(clientX - static_cast<int>(cx),
+                                  clientY - static_cast<int>(cy), modifiers);
             return 0;
         }
 
@@ -56,13 +63,12 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_LBUTTONUP: {
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
-            if (!Overlay::HitTest(clientX, clientY)) return uMsg;
-            if (Overlay::ContentHitTest(clientX, clientY)) {
-                int x, y;
-                ScreenToOverlay(clientX, clientY, x, y);
-                browser->SendMouseClick(x, y, modifiers, 0, // MBT_LEFT
-                                         uMsg == WM_LBUTTONUP, 1);
-            }
+            float cx, cy;
+            InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
+            if (!target) return uMsg;
+            target->SendMouseClick(clientX - static_cast<int>(cx),
+                                   clientY - static_cast<int>(cy),
+                                   modifiers, 0, uMsg == WM_LBUTTONUP, 1);
             return 0;
         }
 
@@ -70,13 +76,12 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_RBUTTONUP: {
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
-            if (!Overlay::HitTest(clientX, clientY)) return uMsg;
-            if (Overlay::ContentHitTest(clientX, clientY)) {
-                int x, y;
-                ScreenToOverlay(clientX, clientY, x, y);
-                browser->SendMouseClick(x, y, modifiers, 2, // MBT_RIGHT
-                                         uMsg == WM_RBUTTONUP, 1);
-            }
+            float cx, cy;
+            InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
+            if (!target) return uMsg;
+            target->SendMouseClick(clientX - static_cast<int>(cx),
+                                   clientY - static_cast<int>(cy),
+                                   modifiers, 2, uMsg == WM_RBUTTONUP, 1);
             return 0;
         }
 
@@ -84,13 +89,12 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_MBUTTONUP: {
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
-            if (!Overlay::HitTest(clientX, clientY)) return uMsg;
-            if (Overlay::ContentHitTest(clientX, clientY)) {
-                int x, y;
-                ScreenToOverlay(clientX, clientY, x, y);
-                browser->SendMouseClick(x, y, modifiers, 1, // MBT_MIDDLE
-                                         uMsg == WM_MBUTTONUP, 1);
-            }
+            float cx, cy;
+            InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
+            if (!target) return uMsg;
+            target->SendMouseClick(clientX - static_cast<int>(cx),
+                                   clientY - static_cast<int>(cy),
+                                   modifiers, 1, uMsg == WM_MBUTTONUP, 1);
             return 0;
         }
 
@@ -98,15 +102,13 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             // WM_MOUSEWHEEL coordinates are in screen space — convert to client
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hWnd, &pt);
-            int clientX = pt.x;
-            int clientY = pt.y;
-            if (!Overlay::HitTest(clientX, clientY)) return uMsg;
-            if (Overlay::ContentHitTest(clientX, clientY)) {
-                int x, y;
-                ScreenToOverlay(clientX, clientY, x, y);
-                int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-                browser->SendMouseWheel(x, y, modifiers, 0, delta);
-            }
+            float cx, cy;
+            InProcessBrowser* target = GetMouseTarget(pt.x, pt.y, cx, cy);
+            if (!target) return uMsg;
+            int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+            target->SendMouseWheel(pt.x - static_cast<int>(cx),
+                                   pt.y - static_cast<int>(cy),
+                                   modifiers, 0, delta);
             return 0;
         }
 
@@ -114,7 +116,8 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_KEYUP:
         case WM_SYSKEYDOWN:
         case WM_SYSKEYUP: {
-            if (!Overlay::HasFocus()) return uMsg;
+            InProcessBrowser* target = GetKeyboardTarget();
+            if (!target) return uMsg;
             uint32_t type;
             switch (uMsg) {
                 case WM_KEYDOWN:
@@ -130,23 +133,24 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     break;
             }
             bool isSys = (uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP);
-            browser->SendKeyEvent(type, modifiers,
-                                   static_cast<int>(wParam),
-                                   static_cast<int>(lParam),
-                                   isSys, 0);
+            target->SendKeyEvent(type, modifiers,
+                                  static_cast<int>(wParam),
+                                  static_cast<int>(lParam),
+                                  isSys, 0);
             return 0;
         }
 
         case WM_CHAR:
         case WM_SYSCHAR: {
-            if (!Overlay::HasFocus()) return uMsg;
+            InProcessBrowser* target = GetKeyboardTarget();
+            if (!target) return uMsg;
             bool isSys = (uMsg == WM_SYSCHAR);
-            browser->SendKeyEvent(3, // KEYEVENT_CHAR
-                                   modifiers,
-                                   static_cast<int>(wParam),
-                                   static_cast<int>(lParam),
-                                   isSys,
-                                   static_cast<uint16_t>(wParam));
+            target->SendKeyEvent(3, // KEYEVENT_CHAR
+                                  modifiers,
+                                  static_cast<int>(wParam),
+                                  static_cast<int>(lParam),
+                                  isSys,
+                                  static_cast<uint16_t>(wParam));
             return 0;
         }
     }

@@ -12,21 +12,11 @@
 namespace WebAppManager {
 
 static CefRefPtr<InProcessBrowser> s_browser;
+static CefRefPtr<InProcessBrowser> s_devTools;
 static std::vector<std::string> s_loadedApps;
 
 static constexpr int DEFAULT_WIDTH  = 1280;
 static constexpr int DEFAULT_HEIGHT = 720;
-
-// Event callback for window resize
-static void OnWindowResized(void* /*aEventArgs*/) {
-    if (!Globals::API || !s_browser) return;
-
-    NexusLinkData_t* nexusLink = static_cast<NexusLinkData_t*>(
-        Globals::API->DataLink_Get(DL_NEXUS_LINK));
-    if (nexusLink && nexusLink->Width > 0 && nexusLink->Height > 0) {
-        s_browser->Resize(nexusLink->Width, nexusLink->Height);
-    }
-}
 
 void Initialize() {
     if (!Globals::API) return;
@@ -57,14 +47,10 @@ void Initialize() {
         s_browser = nullptr;
     }
 
-    // Subscribe to window resize events
-    Globals::API->Events_Subscribe(EV_WINDOW_RESIZED, OnWindowResized);
 }
 
 void Shutdown() {
-    if (Globals::API) {
-        Globals::API->Events_Unsubscribe(EV_WINDOW_RESIZED, OnWindowResized);
-    }
+    CloseDevTools();
 
     IpcHandler::Cleanup();
 
@@ -140,10 +126,50 @@ int GetHeight() {
     return s_browser ? s_browser->GetHeight() : 0;
 }
 
-void FlushFrame() {
+void Resize(int width, int height) {
     if (s_browser) {
-        s_browser->FlushFrame();
+        s_browser->Resize(width, height);
     }
+}
+
+void OpenDevTools() {
+    if (!s_browser || !s_browser->IsReady()) return;
+    if (s_devTools) return; // already open
+
+    s_devTools = new InProcessBrowser();
+
+    CefWindowInfo windowInfo;
+    windowInfo.SetAsWindowless(0);
+
+    CefBrowserSettings settings;
+    settings.windowless_frame_rate = 30;
+
+    s_browser->GetBrowser()->GetHost()->ShowDevTools(
+        windowInfo, CefRefPtr<CefClient>(s_devTools.get()), settings, CefPoint());
+
+    if (Globals::API) {
+        Globals::API->Log(LOGL_INFO, ADDON_NAME, "DevTools opened (offscreen).");
+    }
+}
+
+void CloseDevTools() {
+    if (s_devTools) {
+        s_devTools->Close();
+        s_devTools = nullptr;
+    }
+}
+
+bool IsDevToolsOpen() {
+    return s_devTools && s_devTools->IsReady();
+}
+
+InProcessBrowser* GetDevToolsBrowser() {
+    return s_devTools.get();
+}
+
+void FlushFrame() {
+    if (s_browser) s_browser->FlushFrame();
+    if (s_devTools) s_devTools->FlushFrame();
 }
 
 bool IsReady() {

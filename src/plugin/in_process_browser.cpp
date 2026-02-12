@@ -91,12 +91,14 @@ void InProcessBrowser::Reload() {
 
 void InProcessBrowser::Resize(int width, int height) {
     if (width <= 0 || height <= 0) return;
+    if (width == m_width && height == m_height) return;
     m_width = width;
     m_height = height;
     if (m_browser) {
         m_browser->GetHost()->WasResized();
     }
 }
+
 
 // ---- Input forwarding ----
 
