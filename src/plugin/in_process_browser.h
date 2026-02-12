@@ -98,6 +98,9 @@ public:
                           int line) override;
 
     // CefLoadHandler
+    void OnLoadStart(CefRefPtr<CefBrowser> browser,
+                     CefRefPtr<CefFrame> frame,
+                     TransitionType transition_type) override;
     void OnLoadEnd(CefRefPtr<CefBrowser> browser,
                    CefRefPtr<CefFrame> frame,
                    int httpStatusCode) override;
@@ -124,6 +127,9 @@ private:
     // Addon/window identity
     std::string m_addonId;
     std::string m_windowId;
+
+    // Build the preamble + bridge script for injection
+    std::string BuildBridgeScript() const;
 
     // OnPaint pixel buffer (CEF thread writes, render thread reads via FlushFrame)
     std::mutex             m_frameMutex;

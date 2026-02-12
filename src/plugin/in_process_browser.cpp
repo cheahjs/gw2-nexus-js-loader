@@ -284,20 +284,41 @@ bool InProcessBrowser::OnConsoleMessage(CefRefPtr<CefBrowser> /*browser*/,
 
 // ---- CefLoadHandler ----
 
+// Build the preamble + bridge script string for injection.
+std::string InProcessBrowser::BuildBridgeScript() const {
+    std::string preamble;
+    if (!m_addonId.empty()) {
+        preamble = "window.__nexus_addon_id='" + m_addonId + "';"
+                   "window.__nexus_window_id='" + m_windowId + "';";
+    }
+    return preamble + NexusBridge::GetBridgeScript();
+}
+
+void InProcessBrowser::OnLoadStart(CefRefPtr<CefBrowser> /*browser*/,
+                                    CefRefPtr<CefFrame> frame,
+                                    TransitionType /*transition_type*/) {
+    if (frame->IsMain()) {
+        // Inject bridge early so inline <script> tags can access window.nexus.
+        // OnLoadStart fires after the new V8 context is created but before
+        // the page's HTML is parsed, so the bridge is available to all scripts.
+        frame->ExecuteJavaScript(BuildBridgeScript(), "nexus://bridge", 0);
+
+        if (Globals::API) {
+            Globals::API->Log(LOGL_DEBUG, ADDON_NAME, "Nexus bridge injected (OnLoadStart).");
+        }
+    }
+}
+
 void InProcessBrowser::OnLoadEnd(CefRefPtr<CefBrowser> /*browser*/,
                                   CefRefPtr<CefFrame> frame,
                                   int /*httpStatusCode*/) {
     if (frame->IsMain()) {
-        // Inject addon/window identity preamble before the bridge script
-        std::string preamble;
-        if (!m_addonId.empty()) {
-            preamble = "window.__nexus_addon_id='" + m_addonId + "';"
-                       "window.__nexus_window_id='" + m_windowId + "';";
-        }
-        frame->ExecuteJavaScript(preamble + NexusBridge::GetBridgeScript(), "nexus://bridge", 0);
+        // Re-inject as a fallback — the bridge script guards against
+        // double-injection via window.__nexus_bridge_loaded.
+        frame->ExecuteJavaScript(BuildBridgeScript(), "nexus://bridge", 0);
 
         if (Globals::API) {
-            Globals::API->Log(LOGL_DEBUG, ADDON_NAME, "Nexus bridge injected.");
+            Globals::API->Log(LOGL_DEBUG, ADDON_NAME, "Nexus bridge injected (OnLoadEnd fallback).");
         }
     }
 }

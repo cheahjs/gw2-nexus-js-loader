@@ -35,16 +35,18 @@
     </div>
 
     <script>
-        var windowId = window.__nexus_window_id || 'unknown';
-        var addonId = window.__nexus_addon_id || 'unknown';
+        // Read IDs lazily — they are set by the bridge preamble which is
+        // injected in OnLoadStart (before this script runs). Reading on
+        // demand ensures correctness even if timing varies.
         var passthrough = false;
 
         document.getElementById('windowInfo').textContent =
-            'Addon ID: ' + addonId + '\nWindow ID: ' + windowId;
+            'Addon ID: ' + (window.__nexus_addon_id || '') +
+            '\nWindow ID: ' + (window.__nexus_window_id || '');
 
         function togglePassthrough() {
             passthrough = !passthrough;
-            nexus.windows.setInputPassthrough(windowId, passthrough);
+            nexus.windows.setInputPassthrough(window.__nexus_window_id, passthrough);
             document.getElementById('passthroughStatus').textContent =
                 'Input passthrough: ' + (passthrough ? 'ON' : 'OFF');
             document.getElementById('statusBar').textContent =
@@ -52,10 +54,10 @@
         }
 
         function closeThis() {
-            nexus.windows.close(windowId);
+            nexus.windows.close(window.__nexus_window_id);
         }
 
-        nexus.log.info('ExampleAddon', 'Popup window "' + windowId + '" loaded');
+        nexus.log.info('ExampleAddon', 'Popup window "' + window.__nexus_window_id + '" loaded');
     </script>
 </body>
 </html>

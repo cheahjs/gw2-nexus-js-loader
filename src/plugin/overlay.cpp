@@ -118,6 +118,12 @@ void Render() {
                                    | ImGuiWindowFlags_NoScrollWithMouse
                                    | ImGuiWindowFlags_NoCollapse;
 
+            // When input passthrough is enabled, tell ImGui to ignore mouse
+            // events for this window so clicks pass through to the game.
+            if (window.inputPassthrough) {
+                flags |= ImGuiWindowFlags_NoMouseInputs;
+            }
+
             if (ImGui::Begin(imguiId.c_str(), &window.visible, flags)) {
                 // Track full window bounds for input hit testing
                 ImVec2 wpos = ImGui::GetWindowPos();
