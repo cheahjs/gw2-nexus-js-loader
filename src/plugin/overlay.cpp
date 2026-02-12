@@ -25,17 +25,23 @@ static int s_contentH = 0;
 // Whether the overlay window had ImGui focus last frame
 static bool s_hasFocus = false;
 
+// Whether ImGui considers the content image hovered (accounts for window occlusion)
+static bool s_contentHovered = false;
+
 // DevTools window state
 static float s_dtX = 0.0f;
 static float s_dtY = 0.0f;
 static int   s_dtW = 0;
 static int   s_dtH = 0;
 static bool  s_dtFocus = false;
+static bool  s_dtHovered = false;
 
 // URL input buffer for options panel
 static char s_urlBuffer[2048] = "https://example.com";
 
 void Render() {
+    s_contentHovered = false;
+
     if (!Globals::OverlayVisible) {
         s_hasFocus = false;
         return;
@@ -87,6 +93,7 @@ void Render() {
         }
 
         ImGui::Image(textureHandle, ImVec2(static_cast<float>(s_contentW), static_cast<float>(s_contentH)));
+        s_contentHovered = ImGui::IsItemHovered();
     } else {
         // Window is collapsed — update bounds but clear focus
         ImVec2 wpos = ImGui::GetWindowPos();
@@ -162,6 +169,8 @@ bool HitTest(int clientX, int clientY) {
 }
 
 bool ContentHitTest(int clientX, int clientY) {
+    // s_contentHovered is false when another ImGui window occludes the content
+    if (!s_contentHovered) return false;
     if (s_contentW <= 0 || s_contentH <= 0) return false;
     float x = static_cast<float>(clientX);
     float y = static_cast<float>(clientY);
@@ -172,6 +181,8 @@ bool ContentHitTest(int clientX, int clientY) {
 // ---- DevTools window ----
 
 void RenderDevTools() {
+    s_dtHovered = false;
+
     if (!WebAppManager::IsDevToolsOpen()) {
         s_dtFocus = false;
         s_dtW = 0;
@@ -222,6 +233,7 @@ void RenderDevTools() {
 
         ImGui::Image(textureHandle, ImVec2(static_cast<float>(s_dtW),
                                             static_cast<float>(s_dtH)));
+        s_dtHovered = ImGui::IsItemHovered();
     } else {
         s_dtFocus = false;
         s_dtW = 0;
@@ -244,6 +256,7 @@ bool DevToolsHasFocus() {
 }
 
 bool DevToolsContentHitTest(int clientX, int clientY) {
+    if (!s_dtHovered) return false;
     if (s_dtW <= 0 || s_dtH <= 0) return false;
     float x = static_cast<float>(clientX);
     float y = static_cast<float>(clientY);

@@ -188,8 +188,21 @@ void InProcessBrowser::GetViewRect(CefRefPtr<CefBrowser> /*browser*/, CefRect& r
     rect = CefRect(0, 0, m_width, m_height);
 }
 
+void InProcessBrowser::OnPopupShow(CefRefPtr<CefBrowser> /*browser*/, bool show) {
+    std::lock_guard<std::mutex> lock(m_frameMutex);
+    m_popupVisible = show;
+    if (!show) {
+        m_popupRect = CefRect();
+    }
+}
+
+void InProcessBrowser::OnPopupSize(CefRefPtr<CefBrowser> /*browser*/, const CefRect& rect) {
+    std::lock_guard<std::mutex> lock(m_frameMutex);
+    m_popupRect = rect;
+}
+
 void InProcessBrowser::OnPaint(CefRefPtr<CefBrowser> /*browser*/,
-                                PaintElementType /*type*/,
+                                PaintElementType type,
                                 const RectList& /*dirtyRects*/,
                                 const void* buffer,
                                 int width,
@@ -198,11 +211,45 @@ void InProcessBrowser::OnPaint(CefRefPtr<CefBrowser> /*browser*/,
     // OnPaint is called on CEF's browser thread; D3D11 device context is
     // only safe to use from the render thread, so we defer the texture update.
     std::lock_guard<std::mutex> lock(m_frameMutex);
-    size_t size = static_cast<size_t>(width) * height * 4;
-    m_frameBuffer.resize(size);
-    memcpy(m_frameBuffer.data(), buffer, size);
-    m_frameWidth = width;
-    m_frameHeight = height;
+
+    if (type == PET_VIEW) {
+        size_t size = static_cast<size_t>(width) * height * 4;
+        m_frameBuffer.resize(size);
+        memcpy(m_frameBuffer.data(), buffer, size);
+        m_frameWidth = width;
+        m_frameHeight = height;
+    } else if (type == PET_POPUP && m_popupVisible && m_frameWidth > 0 && m_frameHeight > 0) {
+        // Composite the popup (e.g. <select> dropdown) onto the main view buffer.
+        const uint8_t* src = static_cast<const uint8_t*>(buffer);
+        int srcStride = width * 4;
+        int dstStride = m_frameWidth * 4;
+
+        for (int row = 0; row < height; ++row) {
+            int dstY = m_popupRect.y + row;
+            if (dstY < 0 || dstY >= m_frameHeight) continue;
+
+            int srcX0 = 0;
+            int dstX0 = m_popupRect.x;
+            int copyW = width;
+
+            // Clip left
+            if (dstX0 < 0) {
+                srcX0 = -dstX0;
+                copyW += dstX0;
+                dstX0 = 0;
+            }
+            // Clip right
+            if (dstX0 + copyW > m_frameWidth) {
+                copyW = m_frameWidth - dstX0;
+            }
+            if (copyW <= 0) continue;
+
+            memcpy(m_frameBuffer.data() + dstY * dstStride + dstX0 * 4,
+                   src + row * srcStride + srcX0 * 4,
+                   copyW * 4);
+        }
+    }
+
     m_frameDirty = true;
 }
 

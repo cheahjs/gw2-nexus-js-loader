@@ -10,8 +10,39 @@
 #include <mutex>
 #include <array>
 #include <unordered_map>
+#include <cstring>
 
 using json = nlohmann::json;
+
+// Standard MumbleLink struct (Mumble positional audio protocol).
+// Nexus maps this via DataLink_Get(DL_MUMBLE_LINK).
+struct LinkedMem {
+    uint32_t uiVersion;
+    uint32_t uiTick;
+    float    fAvatarPosition[3];
+    float    fAvatarFront[3];
+    float    fAvatarTop[3];
+    wchar_t  name[256];
+    float    fCameraPosition[3];
+    float    fCameraFront[3];
+    float    fCameraTop[3];
+    wchar_t  identity[256];
+    uint32_t context_len;
+    unsigned char context[256];
+    wchar_t  description[2048];
+};
+
+// Convert wchar_t string to UTF-8 std::string (Windows WideCharToMultiByte)
+static std::string WcharToUtf8(const wchar_t* wstr, size_t maxLen) {
+    size_t len = 0;
+    while (len < maxLen && wstr[len] != L'\0') ++len;
+    if (len == 0) return "";
+    int size = WideCharToMultiByte(CP_UTF8, 0, wstr, static_cast<int>(len), nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return "";
+    std::string result(size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wstr, static_cast<int>(len), &result[0], size, nullptr, nullptr);
+    return result;
+}
 
 namespace IpcHandler {
 
@@ -218,9 +249,22 @@ static bool HandleDataLink(const json& msg, const std::string& action) {
     if (action == "datalink_getMumbleLink") {
         void* mumble = Globals::API->DataLink_Get(DL_MUMBLE_LINK);
         if (mumble) {
-            SendAsyncResponse(requestId, true, "{\"available\":true}");
+            LinkedMem* lm = static_cast<LinkedMem*>(mumble);
+            json j;
+            j["uiVersion"] = lm->uiVersion;
+            j["uiTick"] = lm->uiTick;
+            j["avatarPosition"] = { lm->fAvatarPosition[0], lm->fAvatarPosition[1], lm->fAvatarPosition[2] };
+            j["avatarFront"] = { lm->fAvatarFront[0], lm->fAvatarFront[1], lm->fAvatarFront[2] };
+            j["avatarTop"] = { lm->fAvatarTop[0], lm->fAvatarTop[1], lm->fAvatarTop[2] };
+            j["name"] = WcharToUtf8(lm->name, 256);
+            j["cameraPosition"] = { lm->fCameraPosition[0], lm->fCameraPosition[1], lm->fCameraPosition[2] };
+            j["cameraFront"] = { lm->fCameraFront[0], lm->fCameraFront[1], lm->fCameraFront[2] };
+            j["cameraTop"] = { lm->fCameraTop[0], lm->fCameraTop[1], lm->fCameraTop[2] };
+            j["identity"] = WcharToUtf8(lm->identity, 256);
+            j["contextLen"] = lm->context_len;
+            SendAsyncResponse(requestId, true, j.dump());
         } else {
-            SendAsyncResponse(requestId, true, "{\"available\":false}");
+            SendAsyncResponse(requestId, false, "MumbleLink not available");
         }
     } else if (action == "datalink_getNexusLink") {
         NexusLinkData_t* nexusLink = static_cast<NexusLinkData_t*>(

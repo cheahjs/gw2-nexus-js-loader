@@ -53,7 +53,7 @@ async function getMumbleLink() {
     try {
         const result = await nexus.datalink.getMumbleLink();
         document.getElementById('dataLinkOutput').textContent =
-            `Mumble Link:\n${JSON.stringify(JSON.parse(result), null, 2)}`;
+            `Mumble Link:\n${JSON.stringify(result, null, 2)}`;
         setStatus('Got Mumble Link data');
     } catch (e) {
         document.getElementById('dataLinkOutput').textContent = `Error: ${e}`;
@@ -65,7 +65,7 @@ async function getNexusLink() {
     try {
         const result = await nexus.datalink.getNexusLink();
         document.getElementById('dataLinkOutput').textContent =
-            `Nexus Link:\n${JSON.stringify(JSON.parse(result), null, 2)}`;
+            `Nexus Link:\n${JSON.stringify(result, null, 2)}`;
         setStatus('Got Nexus Link data');
     } catch (e) {
         document.getElementById('dataLinkOutput').textContent = `Error: ${e}`;

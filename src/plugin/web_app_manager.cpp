@@ -154,7 +154,12 @@ void OpenDevTools() {
 
 void CloseDevTools() {
     if (s_devTools) {
-        s_devTools->Close();
+        // DevTools was opened via ShowDevTools() on the parent browser, so it
+        // must be closed through the parent's CloseDevTools() — not by calling
+        // CloseBrowser() directly on the DevTools browser handle, which crashes.
+        if (s_browser && s_browser->GetBrowser()) {
+            s_browser->GetBrowser()->GetHost()->CloseDevTools();
+        }
         s_devTools = nullptr;
     }
 }

@@ -75,6 +75,8 @@ public:
 
     // CefRenderHandler
     void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override;
+    void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
+    void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) override;
     void OnPaint(CefRefPtr<CefBrowser> browser,
                  PaintElementType type,
                  const RectList& dirtyRects,
@@ -119,6 +121,10 @@ private:
     int                    m_frameWidth  = 0;
     int                    m_frameHeight = 0;
     bool                   m_frameDirty  = false;
+
+    // Popup (dropdown) tracking for compositing PET_POPUP onto PET_VIEW
+    bool m_popupVisible = false;
+    CefRect m_popupRect;  // position and size of popup within the view
 
     IMPLEMENT_REFCOUNTING(InProcessBrowser);
     DISALLOW_COPY_AND_ASSIGN(InProcessBrowser);

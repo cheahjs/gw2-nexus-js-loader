@@ -34,16 +34,48 @@ static InProcessBrowser* GetMouseTarget(int clientX, int clientY,
     return nullptr;
 }
 
-// Find which browser should receive keyboard input (whichever has focus).
+// Mouse capture: while a button is held down, keep forwarding mouse events to the
+// browser that received the button-down, even if the cursor leaves the content area.
+// Without this, dragging scrollbars or selections breaks when the cursor moves outside.
+static InProcessBrowser* s_capturedBrowser = nullptr;
+static float s_captureOriginX = 0.0f;
+static float s_captureOriginY = 0.0f;
+
+// External drag: set when a button-down passes through (e.g. ImGui title bar drag).
+// While active, mouse moves pass through too so ImGui can track the drag.
+static bool s_externalDrag = false;
+
+// Keyboard focus: set when clicking in a content area, cleared on click elsewhere.
+// This ensures clicking the game (or title bar, other windows) unfocuses the overlay.
+enum FocusTarget { FOCUS_NONE, FOCUS_OVERLAY, FOCUS_DEVTOOLS };
+static FocusTarget s_focus = FOCUS_NONE;
+
 static InProcessBrowser* GetKeyboardTarget() {
-    if (Overlay::HasFocus()) return WebAppManager::GetBrowser();
-    if (Overlay::DevToolsHasFocus()) return WebAppManager::GetDevToolsBrowser();
-    return nullptr;
+    switch (s_focus) {
+        case FOCUS_OVERLAY:  return WebAppManager::GetBrowser();
+        case FOCUS_DEVTOOLS: return WebAppManager::GetDevToolsBrowser();
+        default:             return nullptr;
+    }
 }
 
 static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     // Nexus convention: return 0 = consumed, non-zero = pass through.
     if (!Globals::OverlayVisible && !WebAppManager::IsDevToolsOpen()) return uMsg;
+
+    // Update keyboard focus on any mouse-button-down event.
+    // Click in overlay content → focus overlay. Click in DevTools → focus DevTools.
+    // Click anywhere else (game, title bar, other addon) → clear focus.
+    if (uMsg == WM_LBUTTONDOWN || uMsg == WM_RBUTTONDOWN || uMsg == WM_MBUTTONDOWN) {
+        int clickX = GET_X_LPARAM(lParam);
+        int clickY = GET_Y_LPARAM(lParam);
+        if (Overlay::ContentHitTest(clickX, clickY)) {
+            s_focus = FOCUS_OVERLAY;
+        } else if (Overlay::DevToolsContentHitTest(clickX, clickY)) {
+            s_focus = FOCUS_DEVTOOLS;
+        } else {
+            s_focus = FOCUS_NONE;
+        }
+    }
 
     uint32_t modifiers = GetModifiers();
 
@@ -51,6 +83,13 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_MOUSEMOVE: {
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
+            if (s_capturedBrowser) {
+                s_capturedBrowser->SendMouseMove(
+                    clientX - static_cast<int>(s_captureOriginX),
+                    clientY - static_cast<int>(s_captureOriginY), modifiers);
+                return 0;
+            }
+            if (s_externalDrag) return uMsg;
             float cx, cy;
             InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
             if (!target) return uMsg;
@@ -59,42 +98,81 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             return 0;
         }
 
-        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDOWN: {
+            int clientX = GET_X_LPARAM(lParam);
+            int clientY = GET_Y_LPARAM(lParam);
+            float cx, cy;
+            InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
+            if (!target) { s_externalDrag = true; return uMsg; }
+            target->SendMouseClick(clientX - static_cast<int>(cx),
+                                   clientY - static_cast<int>(cy),
+                                   modifiers, 0, false, 1);
+            s_capturedBrowser = target;
+            s_captureOriginX = cx;
+            s_captureOriginY = cy;
+            return 0;
+        }
         case WM_LBUTTONUP: {
+            if (!s_capturedBrowser) { s_externalDrag = false; return uMsg; }
+            int clientX = GET_X_LPARAM(lParam);
+            int clientY = GET_Y_LPARAM(lParam);
+            s_capturedBrowser->SendMouseClick(
+                clientX - static_cast<int>(s_captureOriginX),
+                clientY - static_cast<int>(s_captureOriginY),
+                modifiers, 0, true, 1);
+            s_capturedBrowser = nullptr;
+            return 0;
+        }
+
+        case WM_RBUTTONDOWN: {
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
             float cx, cy;
             InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
-            if (!target) return uMsg;
+            if (!target) { s_externalDrag = true; return uMsg; }
             target->SendMouseClick(clientX - static_cast<int>(cx),
                                    clientY - static_cast<int>(cy),
-                                   modifiers, 0, uMsg == WM_LBUTTONUP, 1);
+                                   modifiers, 2, false, 1);
+            s_capturedBrowser = target;
+            s_captureOriginX = cx;
+            s_captureOriginY = cy;
             return 0;
         }
-
-        case WM_RBUTTONDOWN:
         case WM_RBUTTONUP: {
+            if (!s_capturedBrowser) { s_externalDrag = false; return uMsg; }
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
-            float cx, cy;
-            InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
-            if (!target) return uMsg;
-            target->SendMouseClick(clientX - static_cast<int>(cx),
-                                   clientY - static_cast<int>(cy),
-                                   modifiers, 2, uMsg == WM_RBUTTONUP, 1);
+            s_capturedBrowser->SendMouseClick(
+                clientX - static_cast<int>(s_captureOriginX),
+                clientY - static_cast<int>(s_captureOriginY),
+                modifiers, 2, true, 1);
+            s_capturedBrowser = nullptr;
             return 0;
         }
 
-        case WM_MBUTTONDOWN:
-        case WM_MBUTTONUP: {
+        case WM_MBUTTONDOWN: {
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
             float cx, cy;
             InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
-            if (!target) return uMsg;
+            if (!target) { s_externalDrag = true; return uMsg; }
             target->SendMouseClick(clientX - static_cast<int>(cx),
                                    clientY - static_cast<int>(cy),
-                                   modifiers, 1, uMsg == WM_MBUTTONUP, 1);
+                                   modifiers, 1, false, 1);
+            s_capturedBrowser = target;
+            s_captureOriginX = cx;
+            s_captureOriginY = cy;
+            return 0;
+        }
+        case WM_MBUTTONUP: {
+            if (!s_capturedBrowser) { s_externalDrag = false; return uMsg; }
+            int clientX = GET_X_LPARAM(lParam);
+            int clientY = GET_Y_LPARAM(lParam);
+            s_capturedBrowser->SendMouseClick(
+                clientX - static_cast<int>(s_captureOriginX),
+                clientY - static_cast<int>(s_captureOriginY),
+                modifiers, 1, true, 1);
+            s_capturedBrowser = nullptr;
             return 0;
         }
 
