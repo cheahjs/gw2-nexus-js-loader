@@ -1,7 +1,8 @@
 #include "input_handler.h"
 #include "globals.h"
 #include "overlay.h"
-#include "cef_host_proxy.h"
+#include "web_app_manager.h"
+#include "in_process_browser.h"
 #include "shared/version.h"
 
 #include <windows.h>
@@ -27,7 +28,11 @@ static uint32_t GetModifiers() {
 }
 
 static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (!CefHostProxy::IsReady() || !Globals::OverlayVisible) return 0;
+    // Nexus convention: return 0 = consumed, non-zero = pass through.
+    if (!WebAppManager::IsReady() || !Globals::OverlayVisible) return uMsg;
+
+    InProcessBrowser* browser = WebAppManager::GetBrowser();
+    if (!browser) return uMsg;
 
     uint32_t modifiers = GetModifiers();
 
@@ -35,43 +40,43 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_MOUSEMOVE: {
             int x, y;
             ScreenToOverlay(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), x, y);
-            CefHostProxy::SendMouseMove(x, y, modifiers);
-            return 1; // Consumed
+            browser->SendMouseMove(x, y, modifiers);
+            return 0; // Consumed
         }
 
         case WM_LBUTTONDOWN:
         case WM_LBUTTONUP: {
             int x, y;
             ScreenToOverlay(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), x, y);
-            CefHostProxy::SendMouseClick(x, y, modifiers, 0, // MBT_LEFT
-                                          uMsg == WM_LBUTTONUP, 1);
-            return 1;
+            browser->SendMouseClick(x, y, modifiers, 0, // MBT_LEFT
+                                     uMsg == WM_LBUTTONUP, 1);
+            return 0;
         }
 
         case WM_RBUTTONDOWN:
         case WM_RBUTTONUP: {
             int x, y;
             ScreenToOverlay(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), x, y);
-            CefHostProxy::SendMouseClick(x, y, modifiers, 2, // MBT_RIGHT
-                                          uMsg == WM_RBUTTONUP, 1);
-            return 1;
+            browser->SendMouseClick(x, y, modifiers, 2, // MBT_RIGHT
+                                     uMsg == WM_RBUTTONUP, 1);
+            return 0;
         }
 
         case WM_MBUTTONDOWN:
         case WM_MBUTTONUP: {
             int x, y;
             ScreenToOverlay(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), x, y);
-            CefHostProxy::SendMouseClick(x, y, modifiers, 1, // MBT_MIDDLE
-                                          uMsg == WM_MBUTTONUP, 1);
-            return 1;
+            browser->SendMouseClick(x, y, modifiers, 1, // MBT_MIDDLE
+                                     uMsg == WM_MBUTTONUP, 1);
+            return 0;
         }
 
         case WM_MOUSEWHEEL: {
             int x, y;
             ScreenToOverlay(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), x, y);
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-            CefHostProxy::SendMouseWheel(x, y, modifiers, 0, delta);
-            return 1;
+            browser->SendMouseWheel(x, y, modifiers, 0, delta);
+            return 0;
         }
 
         case WM_KEYDOWN:
@@ -93,27 +98,27 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     break;
             }
             bool isSys = (uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP);
-            CefHostProxy::SendKeyEvent(type, modifiers,
-                                        static_cast<int>(wParam),
-                                        static_cast<int>(lParam),
-                                        isSys, 0);
-            return 1;
+            browser->SendKeyEvent(type, modifiers,
+                                   static_cast<int>(wParam),
+                                   static_cast<int>(lParam),
+                                   isSys, 0);
+            return 0;
         }
 
         case WM_CHAR:
         case WM_SYSCHAR: {
             bool isSys = (uMsg == WM_SYSCHAR);
-            CefHostProxy::SendKeyEvent(3, // KEYEVENT_CHAR
-                                        modifiers,
-                                        static_cast<int>(wParam),
-                                        static_cast<int>(lParam),
-                                        isSys,
-                                        static_cast<uint16_t>(wParam));
-            return 1;
+            browser->SendKeyEvent(3, // KEYEVENT_CHAR
+                                   modifiers,
+                                   static_cast<int>(wParam),
+                                   static_cast<int>(lParam),
+                                   isSys,
+                                   static_cast<uint16_t>(wParam));
+            return 0;
         }
     }
 
-    return 0; // Not consumed — pass through to game
+    return uMsg; // Not consumed — pass through to game
 }
 
 void Initialize() {

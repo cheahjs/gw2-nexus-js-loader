@@ -1,6 +1,5 @@
 #include "overlay.h"
 #include "globals.h"
-#include "cef_host_proxy.h"
 #include "web_app_manager.h"
 #include "shared/version.h"
 
@@ -17,11 +16,11 @@ static char s_urlBuffer[2048] = "https://example.com";
 void Render() {
     if (!Globals::OverlayVisible) return;
 
-    void* textureHandle = CefHostProxy::GetTextureHandle();
+    void* textureHandle = WebAppManager::GetTextureHandle();
     if (!textureHandle) return;
 
-    int texW = CefHostProxy::GetWidth();
-    int texH = CefHostProxy::GetHeight();
+    int texW = WebAppManager::GetWidth();
+    int texH = WebAppManager::GetHeight();
     if (texW <= 0 || texH <= 0) return;
 
     // Set ImGui context from Nexus
@@ -50,7 +49,7 @@ void RenderOptions() {
 
     ImGui::Text("Overlay toggle: ALT+SHIFT+J");
     ImGui::Text("Status: %s", Globals::OverlayVisible ? "Visible" : "Hidden");
-    ImGui::Text("Host: %s", CefHostProxy::IsReady() ? "Connected" : "Not connected");
+    ImGui::Text("Browser: %s", WebAppManager::IsReady() ? "Ready" : "Not ready");
 
     ImGui::Separator();
     ImGui::TextUnformatted("Web App URL:");

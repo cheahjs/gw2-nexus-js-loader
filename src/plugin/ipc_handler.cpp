@@ -1,17 +1,28 @@
 #include "ipc_handler.h"
+#include "in_process_browser.h"
 #include "globals.h"
-#include "cef_host_proxy.h"
-#include "shared/ipc_messages.h"
 #include "shared/version.h"
+
+#include "nlohmann/json.hpp"
 
 #include <string>
 #include <vector>
 #include <mutex>
+#include <array>
 #include <unordered_map>
+
+using json = nlohmann::json;
 
 namespace IpcHandler {
 
+// ---- Browser reference for ExecuteJavaScript calls ----
+
+static InProcessBrowser* s_browser = nullptr;
+
 // ---- Event dispatch infrastructure ----
+// EVENT_CONSUME is void(*)(void*) — a C function pointer that can't hold state.
+// We use a template-generated trampoline table so each event subscription gets
+// a unique function pointer that looks up its event name from a static table.
 
 struct PendingEvent {
     std::string name;
@@ -20,7 +31,28 @@ struct PendingEvent {
 
 static std::mutex                    s_eventMutex;
 static std::vector<PendingEvent>     s_pendingEvents;
-static std::unordered_map<std::string, EVENT_CONSUME> s_eventCallbacks;
+
+static constexpr int MAX_EVENT_SLOTS = 64;
+static std::string s_eventSlotNames[MAX_EVENT_SLOTS];
+static bool        s_eventSlotUsed[MAX_EVENT_SLOTS] = {};
+
+template<int N>
+static void EventTrampoline(void* /*aEventArgs*/) {
+    std::lock_guard<std::mutex> lock(s_eventMutex);
+    s_pendingEvents.push_back({s_eventSlotNames[N], ""});
+}
+
+template<int... Is>
+static std::array<EVENT_CONSUME, sizeof...(Is)>
+MakeTrampolineTable(std::integer_sequence<int, Is...>) {
+    return {{ &EventTrampoline<Is>... }};
+}
+
+static auto s_trampolines = MakeTrampolineTable(
+    std::make_integer_sequence<int, MAX_EVENT_SLOTS>{});
+
+// Maps event name → trampoline slot index
+static std::unordered_map<std::string, int> s_eventSlots;
 
 // ---- Keybind dispatch infrastructure ----
 
@@ -33,21 +65,34 @@ static std::mutex                     s_keybindMutex;
 static std::vector<PendingKeybind>    s_pendingKeybinds;
 static std::unordered_map<std::string, INPUTBINDS_PROCESS> s_keybindCallbacks;
 
-// ---- Helper: send async response over pipe ----
+// ---- Helper: send async response to JS via ExecuteJavaScript ----
 
 static void SendAsyncResponse(int requestId, bool success, const std::string& value) {
-    CefHostProxy::SendApiResponse(requestId, success, value);
+    if (!s_browser) return;
+
+    // Escape the value string for embedding in JS
+    json j;
+    j["type"] = "response";
+    j["requestId"] = requestId;
+    j["success"] = success;
+
+    // Try to parse value as JSON — if it parses, embed as object; otherwise as string
+    try {
+        j["value"] = json::parse(value);
+    } catch (...) {
+        j["value"] = value;
+    }
+
+    std::string code = "window.__nexus_dispatch(" + j.dump() + ");";
+    s_browser->ExecuteJavaScript(code);
 }
 
-// ---- IPC message handlers ----
+// ---- JSON message handlers ----
 
-using Args = std::vector<PipeProtocol::PipeArg>;
-
-static bool HandleLog(const Args& args) {
-    if (args.size() < 3) return false;
-    int level = args[0].intVal;
-    std::string channel = args[1].strVal;
-    std::string text = args[2].strVal;
+static bool HandleLog(const json& msg) {
+    int level = msg.value("level", 3);
+    std::string channel = msg.value("channel", "");
+    std::string text = msg.value("message", "");
 
     if (Globals::API) {
         Globals::API->Log(static_cast<ELogLevel>(level), channel.c_str(), text.c_str());
@@ -55,43 +100,43 @@ static bool HandleLog(const Args& args) {
     return true;
 }
 
-static bool HandleAlert(const Args& args) {
-    if (args.size() < 1) return false;
-    std::string text = args[0].strVal;
-
+static bool HandleAlert(const json& msg) {
+    std::string text = msg.value("message", "");
     if (Globals::API) {
         Globals::API->GUI_SendAlert(text.c_str());
     }
     return true;
 }
 
-static bool HandleEventsSubscribe(const Args& args) {
-    if (args.size() < 1) return false;
-    std::string eventName = args[0].strVal;
-    SubscribeEvent(eventName);
+static bool HandleEventsSubscribe(const json& msg) {
+    std::string eventName = msg.value("name", "");
+    if (!eventName.empty()) {
+        SubscribeEvent(eventName);
+    }
     return true;
 }
 
-static bool HandleEventsUnsubscribe(const Args& args) {
-    if (args.size() < 1) return false;
-    std::string eventName = args[0].strVal;
-    UnsubscribeEvent(eventName);
+static bool HandleEventsUnsubscribe(const json& msg) {
+    std::string eventName = msg.value("name", "");
+    if (!eventName.empty()) {
+        UnsubscribeEvent(eventName);
+    }
     return true;
 }
 
-static bool HandleEventsRaise(const Args& args) {
-    if (args.size() < 1) return false;
-    std::string eventName = args[0].strVal;
-    if (Globals::API) {
+static bool HandleEventsRaise(const json& msg) {
+    std::string eventName = msg.value("name", "");
+    if (!eventName.empty() && Globals::API) {
         Globals::API->Events_RaiseNotification(eventName.c_str());
     }
     return true;
 }
 
-static bool HandleKeybindsRegister(const Args& args) {
-    if (args.size() < 2) return false;
-    std::string identifier = args[0].strVal;
-    std::string defaultBind = args[1].strVal;
+static bool HandleKeybindsRegister(const json& msg) {
+    std::string identifier = msg.value("id", "");
+    std::string defaultBind = msg.value("defaultBind", "");
+
+    if (identifier.empty()) return false;
 
     auto callback = [](const char* aIdentifier, bool aIsRelease) {
         std::lock_guard<std::mutex> lock(s_keybindMutex);
@@ -106,9 +151,9 @@ static bool HandleKeybindsRegister(const Args& args) {
     return true;
 }
 
-static bool HandleKeybindsDeregister(const Args& args) {
-    if (args.size() < 1) return false;
-    std::string identifier = args[0].strVal;
+static bool HandleKeybindsDeregister(const json& msg) {
+    std::string identifier = msg.value("id", "");
+    if (identifier.empty()) return false;
 
     if (Globals::API) {
         Globals::API->InputBinds_Deregister(identifier.c_str());
@@ -117,30 +162,28 @@ static bool HandleKeybindsDeregister(const Args& args) {
     return true;
 }
 
-static bool HandleGameBinds(const Args& args, const std::string& msgName) {
-    if (args.size() < 1) return false;
-    int bind = args[0].intVal;
+static bool HandleGameBinds(const json& msg, const std::string& action) {
+    int bind = msg.value("bind", 0);
 
     if (!Globals::API) return true;
 
-    if (msgName == IPC::GAMEBINDS_PRESS) {
+    if (action == "gamebinds_press") {
         Globals::API->GameBinds_PressAsync(static_cast<EGameBinds>(bind));
-    } else if (msgName == IPC::GAMEBINDS_RELEASE) {
+    } else if (action == "gamebinds_release") {
         Globals::API->GameBinds_ReleaseAsync(static_cast<EGameBinds>(bind));
-    } else if (msgName == IPC::GAMEBINDS_INVOKE) {
-        int duration = (args.size() > 1) ? args[1].intVal : 0;
+    } else if (action == "gamebinds_invoke") {
+        int duration = msg.value("durationMs", 0);
         Globals::API->GameBinds_InvokeAsync(static_cast<EGameBinds>(bind), duration);
-    } else if (msgName == IPC::GAMEBINDS_ISBOUND) {
-        int requestId = (args.size() > 1) ? args[1].intVal : 0;
+    } else if (action == "gamebinds_isBound") {
+        int requestId = msg.value("requestId", 0);
         bool result = Globals::API->GameBinds_IsBound(static_cast<EGameBinds>(bind));
         SendAsyncResponse(requestId, true, result ? "true" : "false");
     }
     return true;
 }
 
-static bool HandlePaths(const Args& args, const std::string& msgName) {
-    if (args.size() < 1) return false;
-    int requestId = args[0].intVal;
+static bool HandlePaths(const json& msg, const std::string& action) {
+    int requestId = msg.value("requestId", 0);
 
     if (!Globals::API) {
         SendAsyncResponse(requestId, false, "API not available");
@@ -148,14 +191,14 @@ static bool HandlePaths(const Args& args, const std::string& msgName) {
     }
 
     std::string result;
-    if (msgName == IPC::PATHS_GAME_DIR) {
+    if (action == "paths_getGameDirectory") {
         const char* p = Globals::API->Paths_GetGameDirectory();
         result = p ? p : "";
-    } else if (msgName == IPC::PATHS_ADDON_DIR) {
-        std::string name = (args.size() > 1) ? args[1].strVal : "";
+    } else if (action == "paths_getAddonDirectory") {
+        std::string name = msg.value("name", "");
         const char* p = Globals::API->Paths_GetAddonDirectory(name.empty() ? nullptr : name.c_str());
         result = p ? p : "";
-    } else if (msgName == IPC::PATHS_COMMON_DIR) {
+    } else if (action == "paths_getCommonDirectory") {
         const char* p = Globals::API->Paths_GetCommonDirectory();
         result = p ? p : "";
     }
@@ -164,35 +207,33 @@ static bool HandlePaths(const Args& args, const std::string& msgName) {
     return true;
 }
 
-static bool HandleDataLink(const Args& args, const std::string& msgName) {
-    if (args.size() < 1) return false;
-    int requestId = args[0].intVal;
+static bool HandleDataLink(const json& msg, const std::string& action) {
+    int requestId = msg.value("requestId", 0);
 
     if (!Globals::API) {
         SendAsyncResponse(requestId, false, "API not available");
         return true;
     }
 
-    if (msgName == IPC::DATALINK_GET_MUMBLE) {
+    if (action == "datalink_getMumbleLink") {
         void* mumble = Globals::API->DataLink_Get(DL_MUMBLE_LINK);
         if (mumble) {
             SendAsyncResponse(requestId, true, "{\"available\":true}");
         } else {
             SendAsyncResponse(requestId, true, "{\"available\":false}");
         }
-    } else if (msgName == IPC::DATALINK_GET_NEXUS) {
+    } else if (action == "datalink_getNexusLink") {
         NexusLinkData_t* nexusLink = static_cast<NexusLinkData_t*>(
             Globals::API->DataLink_Get(DL_NEXUS_LINK));
         if (nexusLink) {
-            char json[512];
-            snprintf(json, sizeof(json),
-                "{\"width\":%u,\"height\":%u,\"scaling\":%.2f,"
-                "\"isMoving\":%s,\"isCameraMoving\":%s,\"isGameplay\":%s}",
-                nexusLink->Width, nexusLink->Height, nexusLink->Scaling,
-                nexusLink->IsMoving ? "true" : "false",
-                nexusLink->IsCameraMoving ? "true" : "false",
-                nexusLink->IsGameplay ? "true" : "false");
-            SendAsyncResponse(requestId, true, json);
+            json j;
+            j["width"] = nexusLink->Width;
+            j["height"] = nexusLink->Height;
+            j["scaling"] = nexusLink->Scaling;
+            j["isMoving"] = nexusLink->IsMoving;
+            j["isCameraMoving"] = nexusLink->IsCameraMoving;
+            j["isGameplay"] = nexusLink->IsGameplay;
+            SendAsyncResponse(requestId, true, j.dump());
         } else {
             SendAsyncResponse(requestId, false, "NexusLink not available");
         }
@@ -200,45 +241,40 @@ static bool HandleDataLink(const Args& args, const std::string& msgName) {
     return true;
 }
 
-static bool HandleQuickAccess(const Args& args, const std::string& msgName) {
+static bool HandleQuickAccess(const json& msg, const std::string& action) {
     if (!Globals::API) return true;
 
-    if (msgName == IPC::QA_ADD) {
-        if (args.size() < 5) return false;
-        std::string id      = args[0].strVal;
-        std::string tex     = args[1].strVal;
-        std::string texHov  = args[2].strVal;
-        std::string keybind = args[3].strVal;
-        std::string tooltip = args[4].strVal;
+    if (action == "quickaccess_add") {
+        std::string id      = msg.value("id", "");
+        std::string tex     = msg.value("texture", "");
+        std::string texHov  = msg.value("textureHover", "");
+        std::string keybind = msg.value("keybind", "");
+        std::string tooltip = msg.value("tooltip", "");
         Globals::API->QuickAccess_Add(
             id.c_str(), tex.c_str(), texHov.c_str(),
             keybind.c_str(), tooltip.c_str());
-    } else if (msgName == IPC::QA_REMOVE) {
-        if (args.size() < 1) return false;
-        std::string id = args[0].strVal;
+    } else if (action == "quickaccess_remove") {
+        std::string id = msg.value("id", "");
         Globals::API->QuickAccess_Remove(id.c_str());
-    } else if (msgName == IPC::QA_NOTIFY) {
-        if (args.size() < 1) return false;
-        std::string id = args[0].strVal;
+    } else if (action == "quickaccess_notify") {
+        std::string id = msg.value("id", "");
         Globals::API->QuickAccess_Notify(id.c_str());
     }
     return true;
 }
 
-static bool HandleLocalization(const Args& args, const std::string& msgName) {
+static bool HandleLocalization(const json& msg, const std::string& action) {
     if (!Globals::API) return true;
 
-    if (msgName == IPC::LOC_TRANSLATE) {
-        if (args.size() < 2) return false;
-        int requestId = args[0].intVal;
-        std::string id = args[1].strVal;
+    if (action == "localization_translate") {
+        int requestId = msg.value("requestId", 0);
+        std::string id = msg.value("id", "");
         const char* result = Globals::API->Localization_Translate(id.c_str());
         SendAsyncResponse(requestId, true, result ? result : id);
-    } else if (msgName == IPC::LOC_SET) {
-        if (args.size() < 3) return false;
-        std::string id   = args[0].strVal;
-        std::string lang = args[1].strVal;
-        std::string text = args[2].strVal;
+    } else if (action == "localization_set") {
+        std::string id   = msg.value("id", "");
+        std::string lang = msg.value("lang", "");
+        std::string text = msg.value("text", "");
         Globals::API->Localization_Set(id.c_str(), lang.c_str(), text.c_str());
     }
     return true;
@@ -246,89 +282,142 @@ static bool HandleLocalization(const Args& args, const std::string& msgName) {
 
 // ---- Public interface ----
 
-bool HandleApiRequest(const std::string& messageName,
-                       const std::vector<PipeProtocol::PipeArg>& args) {
-    if (messageName == IPC::LOG_MESSAGE)        return HandleLog(args);
-    if (messageName == IPC::ALERT)              return HandleAlert(args);
-    if (messageName == IPC::EVENTS_SUBSCRIBE)   return HandleEventsSubscribe(args);
-    if (messageName == IPC::EVENTS_UNSUBSCRIBE) return HandleEventsUnsubscribe(args);
-    if (messageName == IPC::EVENTS_RAISE)       return HandleEventsRaise(args);
-    if (messageName == IPC::KEYBINDS_REGISTER)  return HandleKeybindsRegister(args);
-    if (messageName == IPC::KEYBINDS_DEREGISTER) return HandleKeybindsDeregister(args);
-
-    if (messageName == IPC::GAMEBINDS_PRESS ||
-        messageName == IPC::GAMEBINDS_RELEASE ||
-        messageName == IPC::GAMEBINDS_INVOKE ||
-        messageName == IPC::GAMEBINDS_ISBOUND) {
-        return HandleGameBinds(args, messageName);
+bool HandleBridgeMessage(const std::string& jsonStr, InProcessBrowser* browser) {
+    json msg;
+    try {
+        msg = json::parse(jsonStr);
+    } catch (const json::parse_error& e) {
+        if (Globals::API) {
+            Globals::API->Log(LOGL_WARNING, ADDON_NAME,
+                (std::string("Bridge JSON parse error: ") + e.what()).c_str());
+        }
+        return false;
     }
 
-    if (messageName == IPC::PATHS_GAME_DIR ||
-        messageName == IPC::PATHS_ADDON_DIR ||
-        messageName == IPC::PATHS_COMMON_DIR) {
-        return HandlePaths(args, messageName);
+    std::string action = msg.value("action", "");
+    if (action.empty()) return false;
+
+    // Route by action name
+    if (action == "log")                   return HandleLog(msg);
+    if (action == "alert")                 return HandleAlert(msg);
+    if (action == "events_subscribe")      return HandleEventsSubscribe(msg);
+    if (action == "events_unsubscribe")    return HandleEventsUnsubscribe(msg);
+    if (action == "events_raise")          return HandleEventsRaise(msg);
+    if (action == "keybinds_register")     return HandleKeybindsRegister(msg);
+    if (action == "keybinds_deregister")   return HandleKeybindsDeregister(msg);
+
+    if (action == "gamebinds_press" || action == "gamebinds_release" ||
+        action == "gamebinds_invoke" || action == "gamebinds_isBound") {
+        return HandleGameBinds(msg, action);
     }
 
-    if (messageName == IPC::DATALINK_GET_MUMBLE ||
-        messageName == IPC::DATALINK_GET_NEXUS) {
-        return HandleDataLink(args, messageName);
+    if (action == "paths_getGameDirectory" || action == "paths_getAddonDirectory" ||
+        action == "paths_getCommonDirectory") {
+        return HandlePaths(msg, action);
     }
 
-    if (messageName == IPC::QA_ADD ||
-        messageName == IPC::QA_REMOVE ||
-        messageName == IPC::QA_NOTIFY) {
-        return HandleQuickAccess(args, messageName);
+    if (action == "datalink_getMumbleLink" || action == "datalink_getNexusLink") {
+        return HandleDataLink(msg, action);
     }
 
-    if (messageName == IPC::LOC_TRANSLATE ||
-        messageName == IPC::LOC_SET) {
-        return HandleLocalization(args, messageName);
+    if (action == "quickaccess_add" || action == "quickaccess_remove" ||
+        action == "quickaccess_notify") {
+        return HandleQuickAccess(msg, action);
     }
 
-    return false; // Unhandled
+    if (action == "localization_translate" || action == "localization_set") {
+        return HandleLocalization(msg, action);
+    }
+
+    if (Globals::API) {
+        Globals::API->Log(LOGL_DEBUG, ADDON_NAME,
+            (std::string("Unhandled bridge action: ") + action).c_str());
+    }
+    return false;
+}
+
+void SetBrowser(InProcessBrowser* browser) {
+    s_browser = browser;
 }
 
 void SubscribeEvent(const std::string& eventName) {
     if (!Globals::API) return;
 
-    auto callback = [](void* aEventArgs) {
-        (void)aEventArgs;
-    };
+    // Already subscribed?
+    if (s_eventSlots.count(eventName)) return;
 
-    s_eventCallbacks[eventName] = callback;
-    Globals::API->Events_Subscribe(eventName.c_str(), callback);
-
-    if (Globals::API) {
-        Globals::API->Log(LOGL_DEBUG, ADDON_NAME,
-            (std::string("Subscribed to event: ") + eventName).c_str());
+    // Allocate a trampoline slot
+    int slot = -1;
+    for (int i = 0; i < MAX_EVENT_SLOTS; ++i) {
+        if (!s_eventSlotUsed[i]) {
+            s_eventSlotUsed[i] = true;
+            s_eventSlotNames[i] = eventName;
+            slot = i;
+            break;
+        }
     }
+
+    if (slot < 0) {
+        Globals::API->Log(LOGL_WARNING, ADDON_NAME,
+            "Too many event subscriptions — max 64 reached.");
+        return;
+    }
+
+    s_eventSlots[eventName] = slot;
+    Globals::API->Events_Subscribe(eventName.c_str(), s_trampolines[slot]);
+
+    Globals::API->Log(LOGL_DEBUG, ADDON_NAME,
+        (std::string("Subscribed to event: ") + eventName).c_str());
 }
 
 void UnsubscribeEvent(const std::string& eventName) {
     if (!Globals::API) return;
 
-    auto it = s_eventCallbacks.find(eventName);
-    if (it != s_eventCallbacks.end()) {
-        Globals::API->Events_Unsubscribe(eventName.c_str(), it->second);
-        s_eventCallbacks.erase(it);
+    auto it = s_eventSlots.find(eventName);
+    if (it != s_eventSlots.end()) {
+        int slot = it->second;
+        Globals::API->Events_Unsubscribe(eventName.c_str(), s_trampolines[slot]);
+        s_eventSlotUsed[slot] = false;
+        s_eventSlotNames[slot].clear();
+        s_eventSlots.erase(it);
     }
 }
 
 void FlushPendingEvents() {
-    // Flush events over pipe
+    if (!s_browser) return;
+
+    // Flush events via ExecuteJavaScript
     {
         std::lock_guard<std::mutex> lock(s_eventMutex);
         for (const auto& ev : s_pendingEvents) {
-            CefHostProxy::SendEventDispatch(ev.name, ev.jsonData);
+            json j;
+            j["type"] = "event";
+            j["name"] = ev.name;
+            if (!ev.jsonData.empty()) {
+                try {
+                    j["data"] = json::parse(ev.jsonData);
+                } catch (...) {
+                    j["data"] = ev.jsonData;
+                }
+            } else {
+                j["data"] = nullptr;
+            }
+            std::string code = "window.__nexus_dispatch(" + j.dump() + ");";
+            s_browser->ExecuteJavaScript(code);
         }
         s_pendingEvents.clear();
     }
 
-    // Flush keybinds over pipe
+    // Flush keybinds via ExecuteJavaScript
     {
         std::lock_guard<std::mutex> lock(s_keybindMutex);
         for (const auto& kb : s_pendingKeybinds) {
-            CefHostProxy::SendKeybindInvoke(kb.identifier, kb.isRelease);
+            json j;
+            j["type"] = "keybind";
+            j["id"] = kb.identifier;
+            j["isRelease"] = kb.isRelease;
+            std::string code = "window.__nexus_dispatch(" + j.dump() + ");";
+            s_browser->ExecuteJavaScript(code);
         }
         s_pendingKeybinds.clear();
     }
@@ -337,11 +426,15 @@ void FlushPendingEvents() {
 void Cleanup() {
     // Unsubscribe all events
     if (Globals::API) {
-        for (const auto& pair : s_eventCallbacks) {
-            Globals::API->Events_Unsubscribe(pair.first.c_str(), pair.second);
+        for (const auto& pair : s_eventSlots) {
+            Globals::API->Events_Unsubscribe(pair.first.c_str(), s_trampolines[pair.second]);
         }
     }
-    s_eventCallbacks.clear();
+    for (const auto& pair : s_eventSlots) {
+        s_eventSlotUsed[pair.second] = false;
+        s_eventSlotNames[pair.second].clear();
+    }
+    s_eventSlots.clear();
 
     // Deregister all keybinds
     if (Globals::API) {
@@ -359,6 +452,8 @@ void Cleanup() {
         std::lock_guard<std::mutex> lock2(s_keybindMutex);
         s_pendingKeybinds.clear();
     }
+
+    s_browser = nullptr;
 }
 
 } // namespace IpcHandler

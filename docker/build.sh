@@ -61,4 +61,4 @@ BATEOF
 echo ""
 echo "=== Build complete ==="
 echo "Output: $PROJECT_DIR/build/"
-ls -la "$PROJECT_DIR/build/"*.dll "$PROJECT_DIR/build/"*.exe "$PROJECT_DIR/build/"*.lib 2>/dev/null || echo "(check build/ for output files)"
+ls -la "$PROJECT_DIR/build/"*.dll "$PROJECT_DIR/build/"*.lib 2>/dev/null || echo "(check build/ for output files)"

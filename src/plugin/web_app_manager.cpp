@@ -1,13 +1,17 @@
 #include "web_app_manager.h"
-#include "globals.h"
-#include "cef_host_proxy.h"
+#include "in_process_browser.h"
 #include "ipc_handler.h"
+#include "cef_loader.h"
+#include "globals.h"
 #include "shared/version.h"
+
+#include "include/cef_browser.h"
 
 #include <string>
 
 namespace WebAppManager {
 
+static CefRefPtr<InProcessBrowser> s_browser;
 static std::vector<std::string> s_loadedApps;
 
 static constexpr int DEFAULT_WIDTH  = 1280;
@@ -15,24 +19,42 @@ static constexpr int DEFAULT_HEIGHT = 720;
 
 // Event callback for window resize
 static void OnWindowResized(void* /*aEventArgs*/) {
-    if (!Globals::API) return;
+    if (!Globals::API || !s_browser) return;
 
     NexusLinkData_t* nexusLink = static_cast<NexusLinkData_t*>(
         Globals::API->DataLink_Get(DL_NEXUS_LINK));
     if (nexusLink && nexusLink->Width > 0 && nexusLink->Height > 0) {
-        CefHostProxy::ResizeBrowser(nexusLink->Width, nexusLink->Height);
+        s_browser->Resize(nexusLink->Width, nexusLink->Height);
     }
 }
 
 void Initialize() {
     if (!Globals::API) return;
+    if (!CefLoader::IsAvailable()) {
+        Globals::API->Log(LOGL_WARNING, ADDON_NAME,
+            "CEF not available yet — browser creation deferred.");
+        return;
+    }
 
-    // Create default browser with a placeholder page
-    std::string defaultUrl = "data:text/html,<html><body style='background:%23222;color:%23eee;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div><h1>JS Loader</h1><p>Use the Options panel to load a web app URL.</p></div></body></html>";
+    // Create the in-process browser
+    s_browser = new InProcessBrowser();
 
-    if (CefHostProxy::CreateBrowser(defaultUrl, DEFAULT_WIDTH, DEFAULT_HEIGHT)) {
-        Globals::API->Log(LOGL_INFO, ADDON_NAME, "Default browser created.");
+    // Set browser reference for IPC handler (event/keybind dispatch)
+    IpcHandler::SetBrowser(s_browser.get());
+
+    // Start with about:blank to minimize renderer-side processing.
+    // A data: URL triggers site isolation and may cause GW2's CefHost.exe
+    // (renderer subprocess) to spawn a new process with custom code that
+    // crashes on our non-GW2 browser. about:blank is more likely to be
+    // handled in a shared or spare renderer.
+    std::string defaultUrl = "about:blank";
+
+    if (s_browser->Create(defaultUrl, DEFAULT_WIDTH, DEFAULT_HEIGHT)) {
         s_loadedApps.push_back(defaultUrl);
+    } else {
+        Globals::API->Log(LOGL_CRITICAL, ADDON_NAME, "Failed to request browser creation.");
+        IpcHandler::SetBrowser(nullptr);
+        s_browser = nullptr;
     }
 
     // Subscribe to window resize events
@@ -46,13 +68,30 @@ void Shutdown() {
 
     IpcHandler::Cleanup();
 
-    CefHostProxy::CloseBrowser();
+    if (s_browser) {
+        s_browser->Close();
+        s_browser = nullptr;
+    }
+
     s_loadedApps.clear();
 }
 
 void LoadUrl(const std::string& url) {
-    if (!CefHostProxy::IsReady()) {
-        if (!CefHostProxy::CreateBrowser(url, DEFAULT_WIDTH, DEFAULT_HEIGHT)) {
+    if (!s_browser || !s_browser->IsReady()) {
+        // Try to create browser if not ready
+        if (!CefLoader::IsAvailable()) {
+            if (Globals::API) {
+                Globals::API->Log(LOGL_WARNING, ADDON_NAME, "CEF not available.");
+            }
+            return;
+        }
+
+        if (!s_browser) {
+            s_browser = new InProcessBrowser();
+            IpcHandler::SetBrowser(s_browser.get());
+        }
+
+        if (!s_browser->Create(url, DEFAULT_WIDTH, DEFAULT_HEIGHT)) {
             if (Globals::API) {
                 Globals::API->Log(LOGL_WARNING, ADDON_NAME, "Failed to create browser for URL.");
             }
@@ -61,7 +100,7 @@ void LoadUrl(const std::string& url) {
         s_loadedApps.push_back(url);
     } else {
         // Navigate existing browser
-        CefHostProxy::Navigate(url);
+        s_browser->Navigate(url);
         if (!s_loadedApps.empty()) {
             s_loadedApps[0] = url;
         } else {
@@ -76,11 +115,39 @@ void LoadUrl(const std::string& url) {
 }
 
 void Reload() {
-    CefHostProxy::Reload();
+    if (s_browser) {
+        s_browser->Reload();
+    }
 }
 
 const std::vector<std::string>& GetLoadedApps() {
     return s_loadedApps;
+}
+
+InProcessBrowser* GetBrowser() {
+    return s_browser.get();
+}
+
+void* GetTextureHandle() {
+    return s_browser ? s_browser->GetTextureHandle() : nullptr;
+}
+
+int GetWidth() {
+    return s_browser ? s_browser->GetWidth() : 0;
+}
+
+int GetHeight() {
+    return s_browser ? s_browser->GetHeight() : 0;
+}
+
+void FlushFrame() {
+    if (s_browser) {
+        s_browser->FlushFrame();
+    }
+}
+
+bool IsReady() {
+    return s_browser && s_browser->IsReady();
 }
 
 } // namespace WebAppManager

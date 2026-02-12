@@ -9,8 +9,6 @@ bool        IsLoaded       = false;
 bool        OverlayVisible = false;
 
 static std::string s_dllDir;
-static std::string s_cefDir;
-static std::string s_hostExePath;
 
 const char* GetDllDirectory() {
     if (s_dllDir.empty() && HModule) {
@@ -23,20 +21,6 @@ const char* GetDllDirectory() {
         }
     }
     return s_dllDir.c_str();
-}
-
-const char* GetCefDirectory() {
-    if (s_cefDir.empty()) {
-        s_cefDir = std::string(GetDllDirectory()) + "\\nexus_js_loader";
-    }
-    return s_cefDir.c_str();
-}
-
-const char* GetCefHostExePath() {
-    if (s_hostExePath.empty()) {
-        s_hostExePath = std::string(GetCefDirectory()) + "\\nexus_js_cef_host.exe";
-    }
-    return s_hostExePath.c_str();
 }
 
 } // namespace Globals

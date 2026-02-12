@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+class InProcessBrowser;
+
 // Manages web app lifecycle: loading/unloading browsers, scanning addon directories.
 namespace WebAppManager {
 
@@ -20,5 +22,21 @@ void Reload();
 
 // Get list of loaded web app URLs.
 const std::vector<std::string>& GetLoadedApps();
+
+// Get the InProcessBrowser instance (for input handler, overlay, etc.)
+InProcessBrowser* GetBrowser();
+
+// Get the current texture handle for overlay rendering.
+void* GetTextureHandle();
+
+// Get current browser dimensions.
+int GetWidth();
+int GetHeight();
+
+// Apply buffered pixel data to D3D11 texture. Call from render thread.
+void FlushFrame();
+
+// Whether the browser is ready for use.
+bool IsReady();
 
 } // namespace WebAppManager

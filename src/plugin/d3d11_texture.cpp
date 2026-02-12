@@ -60,7 +60,8 @@ void D3D11Texture::CreateTexture(int width, int height) {
 }
 
 void D3D11Texture::UpdateFromPixels(const void* pixels, int width, int height) {
-    if (!pixels) return;
+    if (!pixels || width <= 0 || height <= 0) return;
+    if (!Globals::API || !Globals::API->SwapChain) return;
 
     // Recreate if size changed
     if (width != m_width || height != m_height || !m_texture) {
