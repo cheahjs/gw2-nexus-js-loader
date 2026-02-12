@@ -30,7 +30,7 @@ cp "$BUILD_DIR/nexus_js_cef_host.exe" "$SUBFOLDER/"
 cp "$BUILD_DIR/nexus_js_subprocess.exe" "$SUBFOLDER/"
 
 # CEF core DLLs from Release/
-for f in libcef.dll chrome_elf.dll v8_context_snapshot.bin \
+for f in libcef.dll chrome_elf.dll snapshot_blob.bin v8_context_snapshot.bin \
          bootstrap.exe bootstrapc.exe \
          d3dcompiler_47.dll libEGL.dll libGLESv2.dll \
          vk_swiftshader.dll vulkan-1.dll dxcompiler.dll dxil.dll; do

@@ -265,10 +265,12 @@ def link_cef_host():
         f"call C:\\x64.bat\n"
         f"cd /d {BUILD_DIR_WIN}\n"
         f"link.exe /nologo /machine:x64 /INCREMENTAL:NO /subsystem:windows "
+        f"/DELAYLOAD:libcef.dll "
         f"/OUT:nexus_js_cef_host.exe "
         f"{obj_list} "
         f"libcef_dll_wrapper.lib "
         f"{CEF_LIB} "
+        f"delayimp.lib "
         f"{SYSTEM_LIBS}\n"
     )
 
@@ -346,7 +348,7 @@ def copy_runtime_files():
         print(f"  {exe} -> nexus_js_loader/{exe}")
 
     # CEF DLLs and binaries from Release/
-    for f in ["libcef.dll", "chrome_elf.dll", "v8_context_snapshot.bin",
+    for f in ["libcef.dll", "chrome_elf.dll", "snapshot_blob.bin", "v8_context_snapshot.bin",
               "bootstrap.exe", "bootstrapc.exe",
               "d3dcompiler_47.dll", "libEGL.dll", "libGLESv2.dll",
               "vk_swiftshader.dll", "vulkan-1.dll", "dxcompiler.dll", "dxil.dll",

@@ -172,9 +172,14 @@ target_compile_options(nexus_js_cef_host PRIVATE
     /MT
 )
 
+target_link_options(nexus_js_cef_host PRIVATE
+    /DELAYLOAD:libcef.dll
+)
+
 target_link_libraries(nexus_js_cef_host PRIVATE
     libcef_dll_wrapper
     "${CEF_LIB_DIR}/libcef.lib"
+    delayimp.lib
 )
 
 # ============================================================================

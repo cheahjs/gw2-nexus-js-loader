@@ -15,6 +15,7 @@ void HostBrowserApp::OnBeforeCommandLineProcessing(
     command_line->AppendSwitch("disable-gpu-compositing");
     command_line->AppendSwitch("disable-gpu-sandbox");
     command_line->AppendSwitch("no-sandbox");
+    command_line->AppendSwitch("allow-no-sandbox-job");
     command_line->AppendSwitch("disable-breakpad");
 
     // Disable features that may not work under Wine

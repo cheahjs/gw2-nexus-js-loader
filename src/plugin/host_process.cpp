@@ -16,13 +16,25 @@ bool HostProcess::Launch(const std::string& exePath,
                           const std::string& cefDir,
                           const std::string& pipeName,
                           const std::string& shmemName) {
-    // Build command line with only app-specific arguments.
-    // Chromium/CEF switches should be configured via CefSettings or
-    // CefApp::OnBeforeCommandLineProcessing in the host process.
+    // Build command line with app-specific arguments and Wine-compatible
+    // Chromium switches. These must be on the command line (not just in
+    // OnBeforeCommandLineProcessing) because CEF reads some switches very
+    // early during initialization, before the CefApp callback fires.
     std::string cmdLine = "\"" + exePath + "\""
         + " --cef-dir=\"" + cefDir + "\""
         + " --pipe-name=\"" + pipeName + "\""
-        + " --shmem-name=\"" + shmemName + "\"";
+        + " --shmem-name=\"" + shmemName + "\""
+        + " --disable-gpu"
+        + " --disable-gpu-compositing"
+        + " --disable-gpu-sandbox"
+        + " --no-sandbox"
+        + " --allow-no-sandbox-job"
+        + " --disable-breakpad"
+        + " --disable-extensions"
+        + " --disable-component-update"
+        + " --enable-logging"
+        + " --log-severity=verbose"
+        + " --v=1";
 
     STARTUPINFOA si = {};
     si.cb = sizeof(si);
@@ -31,18 +43,39 @@ bool HostProcess::Launch(const std::string& exePath,
     std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
     cmdBuf.push_back('\0');
 
+    // Try to break away from any parent job object. Chromium/CEF startup can
+    // fail in restrictive jobs even when no sandbox is used.
+    DWORD creationFlags = CREATE_BREAKAWAY_FROM_JOB;
     if (!CreateProcessA(
             nullptr,           // application name (use command line)
             cmdBuf.data(),     // command line
             nullptr,           // process security attributes
             nullptr,           // thread security attributes
             FALSE,             // inherit handles
-            0,                 // creation flags
+            creationFlags,     // creation flags
             nullptr,           // environment
             cefDir.c_str(),    // current directory = CEF folder
             &si,
             &m_processInfo)) {
-        return false;
+        DWORD firstErr = GetLastError();
+        if (firstErr == ERROR_ACCESS_DENIED) {
+            // Parent job may not allow breakaway. Retry without the flag.
+            if (!CreateProcessA(
+                    nullptr,
+                    cmdBuf.data(),
+                    nullptr,
+                    nullptr,
+                    FALSE,
+                    0,
+                    nullptr,
+                    cefDir.c_str(),
+                    &si,
+                    &m_processInfo)) {
+                return false;
+            }
+        } else {
+            return false;
+        }
     }
 
     m_launched = true;

@@ -20,6 +20,9 @@ function(copy_cef_runtime_files target)
             "${CEF_LIB_DIR}/chrome_elf.dll"
             "${CEF_SUBDIR}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CEF_LIB_DIR}/snapshot_blob.bin"
+            "${CEF_SUBDIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CEF_LIB_DIR}/v8_context_snapshot.bin"
             "${CEF_SUBDIR}"
         COMMENT "Copying CEF runtime DLLs..."
