@@ -150,7 +150,7 @@ set(HOST_SOURCES
     src/host/host_ipc_bridge.cpp
 )
 
-add_executable(nexus_js_cef_host ${HOST_SOURCES} ${SHARED_SOURCES})
+add_executable(nexus_js_cef_host WIN32 ${HOST_SOURCES} ${SHARED_SOURCES})
 
 target_include_directories(nexus_js_cef_host PRIVATE
     "${CMAKE_SOURCE_DIR}/src"

@@ -25,6 +25,17 @@ function(copy_cef_runtime_files target)
         COMMENT "Copying CEF runtime DLLs..."
     )
 
+    # Copy bootstrap binaries when present (newer CEF Windows builds).
+    foreach(bootstrap_exe bootstrap.exe bootstrapc.exe)
+        if(EXISTS "${CEF_LIB_DIR}/${bootstrap_exe}")
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CEF_LIB_DIR}/${bootstrap_exe}"
+                    "${CEF_SUBDIR}"
+            )
+        endif()
+    endforeach()
+
     # Copy GPU/rendering DLLs
     foreach(gpu_dll d3dcompiler_47.dll libEGL.dll libGLESv2.dll
                     vk_swiftshader.dll vulkan-1.dll dxcompiler.dll dxil.dll)

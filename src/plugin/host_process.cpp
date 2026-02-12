@@ -16,7 +16,9 @@ bool HostProcess::Launch(const std::string& exePath,
                           const std::string& cefDir,
                           const std::string& pipeName,
                           const std::string& shmemName) {
-    // Build command line
+    // Build command line with only app-specific arguments.
+    // Chromium/CEF switches should be configured via CefSettings or
+    // CefApp::OnBeforeCommandLineProcessing in the host process.
     std::string cmdLine = "\"" + exePath + "\""
         + " --cef-dir=\"" + cefDir + "\""
         + " --pipe-name=\"" + pipeName + "\""
@@ -37,7 +39,7 @@ bool HostProcess::Launch(const std::string& exePath,
             FALSE,             // inherit handles
             0,                 // creation flags
             nullptr,           // environment
-            nullptr,           // current directory
+            cefDir.c_str(),    // current directory = CEF folder
             &si,
             &m_processInfo)) {
         return false;

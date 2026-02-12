@@ -264,7 +264,7 @@ def link_cef_host():
         f"@echo off\n"
         f"call C:\\x64.bat\n"
         f"cd /d {BUILD_DIR_WIN}\n"
-        f"link.exe /nologo /machine:x64 /INCREMENTAL:NO /subsystem:console "
+        f"link.exe /nologo /machine:x64 /INCREMENTAL:NO /subsystem:windows "
         f"/OUT:nexus_js_cef_host.exe "
         f"{obj_list} "
         f"libcef_dll_wrapper.lib "

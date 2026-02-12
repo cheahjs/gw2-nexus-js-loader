@@ -13,6 +13,11 @@ public:
         return this;
     }
 
+    // Add Wine/CrossOver-compatible command-line switches
+    void OnBeforeCommandLineProcessing(
+        const CefString& process_type,
+        CefRefPtr<CefCommandLine> command_line) override;
+
     // CefBrowserProcessHandler
     void OnContextInitialized() override;
 

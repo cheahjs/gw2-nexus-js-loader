@@ -6,6 +6,8 @@
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
+#include "include/cef_version.h"
+#include "include/cef_api_hash.h"
 
 #include "host_browser_app.h"
 #include "host_browser_client.h"
@@ -14,32 +16,81 @@
 #include "shared/pipe_protocol.h"
 
 // Parse a command-line argument of the form --key="value" or --key=value
-static std::string GetArg(const char* key, int argc, char* argv[]) {
+// from the full command line string.
+static std::string GetArg(const char* key, const std::string& cmdLine) {
     std::string prefix = std::string("--") + key + "=";
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg.rfind(prefix, 0) == 0) {
-            std::string val = arg.substr(prefix.size());
-            // Strip surrounding quotes if present
-            if (val.size() >= 2 && val.front() == '"' && val.back() == '"') {
-                val = val.substr(1, val.size() - 2);
-            }
-            return val;
+    size_t pos = cmdLine.find(prefix);
+    if (pos == std::string::npos) return "";
+
+    size_t valStart = pos + prefix.size();
+    if (valStart >= cmdLine.size()) return "";
+
+    std::string val;
+    if (cmdLine[valStart] == '"') {
+        // Quoted value
+        size_t endQuote = cmdLine.find('"', valStart + 1);
+        if (endQuote != std::string::npos) {
+            val = cmdLine.substr(valStart + 1, endQuote - valStart - 1);
         }
+    } else {
+        // Unquoted value — ends at space or end of string
+        size_t end = cmdLine.find(' ', valStart);
+        val = cmdLine.substr(valStart, end - valStart);
     }
-    return "";
+    return val;
 }
 
-int main(int argc, char* argv[]) {
-    // Parse required arguments
-    std::string cefDir   = GetArg("cef-dir", argc, argv);
-    std::string pipeName = GetArg("pipe-name", argc, argv);
-    std::string shmemName = GetArg("shmem-name", argc, argv);
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
+    std::string fullCmdLine = GetCommandLineA();
+
+    auto ResolveModuleDir = []() -> std::string {
+        char path[MAX_PATH] = {};
+        GetModuleFileNameA(nullptr, path, MAX_PATH);
+        std::string fullPath(path);
+        size_t pos = fullPath.find_last_of("\\/");
+        if (pos == std::string::npos) {
+            return ".";
+        }
+        return fullPath.substr(0, pos);
+    };
+
+    // Parse cef-dir first so we can redirect stderr there.
+    std::string cefDir = GetArg("cef-dir", fullCmdLine);
+
+    // Redirect stderr for diagnostics. Use append mode so multiple process
+    // instances (including possible CEF child process launches) don't clobber
+    // previous output.
+    std::string stderrBaseDir = cefDir.empty() ? ResolveModuleDir() : cefDir;
+    std::string stderrPath = stderrBaseDir + "\\cef_host_stderr.log";
+    freopen(stderrPath.c_str(), "a", stderr);
+
+    fprintf(stderr, "\n[CEF Host] ==================================================\n");
+    fprintf(stderr, "[CEF Host] PID: %lu\n", GetCurrentProcessId());
+    fprintf(stderr, "[CEF Host] Command line: %s\n", fullCmdLine.c_str());
+    fflush(stderr);
+
+    // If this executable is launched by Chromium as a child process
+    // (--type=renderer/gpu/utility/...), forward immediately to CEF.
+    // This guards against startup failure if browser_subprocess_path is ignored
+    // or unavailable for any reason.
+    if (fullCmdLine.find("--type=") != std::string::npos) {
+        fprintf(stderr, "[CEF Host] Detected CEF child-process invocation.\n");
+        CefMainArgs childArgs(hInstance);
+        int childExit = CefExecuteProcess(childArgs, nullptr, nullptr);
+        fprintf(stderr, "[CEF Host] Child CefExecuteProcess returned: %d\n", childExit);
+        fflush(stderr);
+        return childExit;
+    }
+
+    // Parse remaining arguments
+    std::string pipeName  = GetArg("pipe-name", fullCmdLine);
+    std::string shmemName = GetArg("shmem-name", fullCmdLine);
 
     if (cefDir.empty() || pipeName.empty() || shmemName.empty()) {
         fprintf(stderr, "[CEF Host] Missing required arguments.\n");
         fprintf(stderr, "Usage: nexus_js_cef_host.exe "
                 "--cef-dir=<path> --pipe-name=<name> --shmem-name=<name>\n");
+        fprintf(stderr, "Command line was: %s\n", fullCmdLine.c_str());
         return 1;
     }
 
@@ -47,6 +98,33 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "  cef-dir:    %s\n", cefDir.c_str());
     fprintf(stderr, "  pipe-name:  %s\n", pipeName.c_str());
     fprintf(stderr, "  shmem-name: %s\n", shmemName.c_str());
+
+    auto LogPathStatus = [](const char* label, const std::string& path, bool expectDir) {
+        DWORD attrs = GetFileAttributesA(path.c_str());
+        bool exists = (attrs != INVALID_FILE_ATTRIBUTES);
+        bool isDir = exists && ((attrs & FILE_ATTRIBUTE_DIRECTORY) != 0);
+        bool okType = exists && ((expectDir && isDir) || (!expectDir && !isDir));
+        fprintf(stderr, "[CEF Host] %s: %s (%s)\n",
+                label,
+                okType ? "FOUND" : "MISSING",
+                path.c_str());
+    };
+
+    // Required CEF runtime files. Missing any of these can cause early
+    // CefInitialize failure with little/no logging.
+    LogPathStatus("libcef.dll", cefDir + "\\libcef.dll", false);
+    LogPathStatus("chrome_elf.dll", cefDir + "\\chrome_elf.dll", false);
+    LogPathStatus("icudtl.dat", cefDir + "\\icudtl.dat", false);
+    LogPathStatus("v8_context_snapshot.bin", cefDir + "\\v8_context_snapshot.bin", false);
+    LogPathStatus("chrome_100_percent.pak", cefDir + "\\chrome_100_percent.pak", false);
+    LogPathStatus("chrome_200_percent.pak", cefDir + "\\chrome_200_percent.pak", false);
+    LogPathStatus("resources.pak", cefDir + "\\resources.pak", false);
+    LogPathStatus("locales dir", cefDir + "\\locales", true);
+    LogPathStatus("subprocess", cefDir + "\\nexus_js_subprocess.exe", false);
+    // Newer CEF builds may optionally use bootstrap binaries on Windows.
+    LogPathStatus("bootstrap.exe", cefDir + "\\bootstrap.exe", false);
+    LogPathStatus("bootstrapc.exe", cefDir + "\\bootstrapc.exe", false);
+    fflush(stderr);
 
     // 1. Connect to plugin's named pipe
     HostPipeClient pipe;
@@ -75,16 +153,38 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "[CEF Host] Shared memory mapped.\n");
 
     // 3. Initialize CEF
-    CefMainArgs mainArgs(GetModuleHandle(nullptr));
+    CefMainArgs mainArgs(hInstance);
+
+    // Ensure libcef.dll's dependencies can be found
+    SetDllDirectoryA(cefDir.c_str());
+
+    std::string subprocessPath = cefDir + "\\nexus_js_subprocess.exe";
     CefRefPtr<HostBrowserApp> app = new HostBrowserApp();
+
+    // CefExecuteProcess must be called before CefInitialize. In the browser
+    // process this should return -1.
+    fprintf(stderr, "[CEF Host] Calling CefExecuteProcess...\n");
+    fflush(stderr);
+    int exitCode = CefExecuteProcess(mainArgs, app, nullptr);
+    fprintf(stderr, "[CEF Host] CefExecuteProcess returned: %d\n", exitCode);
+    if (exitCode >= 0) {
+        UnmapViewOfFile(shmemView);
+        CloseHandle(hMapping);
+        pipe.Close();
+        return exitCode;
+    }
+
+    // --- Full initialization ---
+    fprintf(stderr, "[CEF Host] Calling CefInitialize...\n");
+    fflush(stderr);
 
     CefSettings settings = {};
     settings.size = sizeof(CefSettings);
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false;
     settings.windowless_rendering_enabled = true;
+    settings.command_line_args_disabled = true;
 
-    std::string subprocessPath = cefDir + "\\nexus_js_subprocess.exe";
     CefString(&settings.browser_subprocess_path).FromString(subprocessPath);
 
     CefString(&settings.resources_dir_path).FromString(cefDir);
@@ -92,18 +192,93 @@ int main(int argc, char* argv[]) {
     std::string localesDir = cefDir + "\\locales";
     CefString(&settings.locales_dir_path).FromString(localesDir);
 
-    std::string cachePath = cefDir + "\\cef_cache";
+    char tempPath[MAX_PATH] = {};
+    GetTempPathA(MAX_PATH, tempPath);
+    std::string tempDir = std::string(tempPath) + "nexus_js_cef_"
+                        + std::to_string(GetCurrentProcessId())
+                        + "_" + std::to_string((unsigned long long)GetTickCount64());
+    CreateDirectoryA(tempDir.c_str(), nullptr);
+
+    std::string rootCachePath = tempDir;
+    CefString(&settings.root_cache_path).FromString(rootCachePath);
+
+    std::string cachePath = rootCachePath + "\\cache";
+    CreateDirectoryA(cachePath.c_str(), nullptr);
     CefString(&settings.cache_path).FromString(cachePath);
 
-    std::string logPath = cefDir + "\\cef_debug.log";
+    std::string logPath = tempDir + "\\cef_debug.log";
     CefString(&settings.log_file).FromString(logPath);
-    settings.log_severity = LOGSEVERITY_INFO;
+    settings.log_severity = LOGSEVERITY_VERBOSE;
 
-    // Ensure libcef.dll's dependencies can be found
-    SetDllDirectoryA(cefDir.c_str());
+    // Chromium also honors CHROME_LOG_FILE in many startup paths.
+    SetEnvironmentVariableA("CHROME_LOG_FILE", logPath.c_str());
+
+    // Verify API hash match between wrapper and libcef.dll
+    // CEF 103 uses 1-param cef_api_hash(entry): 0=universal, 1=platform
+    const char* runtime_hash = cef_api_hash(1);
+    fprintf(stderr, "[CEF Host] API hash: %s\n",
+            (runtime_hash && strcmp(runtime_hash, CEF_API_HASH_PLATFORM) == 0) ? "MATCH" : "MISMATCH");
+    fprintf(stderr, "[CEF Host] CEF version: %s (Chromium %d)\n",
+            CEF_VERSION, CHROME_VERSION_MAJOR);
+
+    fprintf(stderr, "[CEF Host] CEF settings:\n");
+    fprintf(stderr, "  subprocess:      %s\n", subprocessPath.c_str());
+    fprintf(stderr, "  resources_dir:   %s\n", cefDir.c_str());
+    fprintf(stderr, "  locales_dir:     %s\n", localesDir.c_str());
+    fprintf(stderr, "  root_cache_path: %s\n", rootCachePath.c_str());
+    fprintf(stderr, "  cache_path:      %s\n", cachePath.c_str());
+    fprintf(stderr, "  log_file:        %s\n", logPath.c_str());
+
+    // Verify cache/log dir write permissions explicitly.
+    std::string testFile = tempDir + "\\write_test.tmp";
+    FILE* tf = fopen(testFile.c_str(), "w");
+    if (tf) {
+        fprintf(tf, "test");
+        fclose(tf);
+        DeleteFileA(testFile.c_str());
+        fprintf(stderr, "[CEF Host] Cache/log dir writable: YES (%s)\n", tempDir.c_str());
+    } else {
+        fprintf(stderr, "[CEF Host] Cache/log dir writable: NO (%s) (error %lu)\n",
+                tempDir.c_str(), GetLastError());
+    }
+    fflush(stderr);
 
     if (!CefInitialize(mainArgs, settings, app, nullptr)) {
         fprintf(stderr, "[CEF Host] CefInitialize failed!\n");
+
+        // Try to read and report CEF debug log for diagnostics.
+        fprintf(stderr, "[CEF Host] --- cef_debug.log contents ---\n");
+        FILE* cefLog = fopen(logPath.c_str(), "r");
+        if (cefLog) {
+            char buf[512];
+            while (fgets(buf, sizeof(buf), cefLog)) {
+                fprintf(stderr, "  %s", buf);
+            }
+            fclose(cefLog);
+        } else {
+            fprintf(stderr, "  (no log file created at %s)\n", logPath.c_str());
+        }
+        fprintf(stderr, "[CEF Host] --- end cef_debug.log ---\n");
+
+        // Print runtime environment details for Wine/CrossOver diagnostics.
+        OSVERSIONINFOW osvi = {};
+        osvi.dwOSVersionInfoSize = sizeof(osvi);
+        typedef LONG (WINAPI *RtlGetVersionPtr)(OSVERSIONINFOW*);
+        RtlGetVersionPtr rtlGetVersion = (RtlGetVersionPtr)GetProcAddress(
+            GetModuleHandleA("ntdll.dll"), "RtlGetVersion");
+        if (rtlGetVersion && rtlGetVersion(&osvi) == 0) {
+            fprintf(stderr, "[CEF Host] Windows version (Wine): %lu.%lu.%lu\n",
+                    osvi.dwMajorVersion, osvi.dwMinorVersion, osvi.dwBuildNumber);
+        }
+        typedef const char* (WINAPI *wine_get_version_ptr)(void);
+        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+        wine_get_version_ptr wine_get_version = (wine_get_version_ptr)
+            GetProcAddress(ntdll, "wine_get_version");
+        if (wine_get_version) {
+            fprintf(stderr, "[CEF Host] Wine version: %s\n", wine_get_version());
+        }
+        fflush(stderr);
+
         std::string errMsg = "CefInitialize failed";
         pipe.Send(PipeProtocol::MSG_HOST_ERROR, errMsg.data(),
                   static_cast<uint32_t>(errMsg.size()));

@@ -1,7 +1,7 @@
 # Download CEF binary distribution at configure time
 # Uses the Spotify CDN for CEF builds
 
-set(CEF_VERSION "145.0.22+g0fa8d1b+chromium-145.0.7632.45" CACHE STRING "CEF version to download")
+set(CEF_VERSION "103.0.10+ga5c79bb+chromium-103.0.5060.114" CACHE STRING "CEF version to download")
 set(CEF_PLATFORM "windows64" CACHE STRING "CEF platform")
 
 # URL-encode the version string (+ → %2B)

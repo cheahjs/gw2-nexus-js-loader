@@ -16,6 +16,9 @@ third_party/cef/
 .idea/
 cmake-build-*/
 
+# Local config
+.env
+
 # OS
 .DS_Store
 Thumbs.db
