@@ -324,6 +324,57 @@ def link_dll():
         return True
 
 
+def copy_runtime_files():
+    """Copy executables and CEF runtime files into nexus_js_loader/ subfolder.
+
+    Mirrors the CMake post-build commands that ninja would run.
+    """
+    import shutil
+
+    cef_dist = "/project/third_party/cef/cef_dist"
+    subfolder = os.path.join(BUILD_DIR_LINUX, "nexus_js_loader")
+    locales_dir = os.path.join(subfolder, "locales")
+    os.makedirs(locales_dir, exist_ok=True)
+
+    print("\n=== Copying executables and CEF runtime to subfolder ===")
+
+    # Executables
+    for exe in ["nexus_js_subprocess.exe", "nexus_js_cef_host.exe"]:
+        src = os.path.join(BUILD_DIR_LINUX, exe)
+        dst = os.path.join(subfolder, exe)
+        shutil.copy2(src, dst)
+        print(f"  {exe} -> nexus_js_loader/{exe}")
+
+    # CEF DLLs and binaries from Release/
+    for f in ["libcef.dll", "chrome_elf.dll", "v8_context_snapshot.bin",
+              "bootstrap.exe", "bootstrapc.exe",
+              "d3dcompiler_47.dll", "libEGL.dll", "libGLESv2.dll",
+              "vk_swiftshader.dll", "vulkan-1.dll", "dxcompiler.dll", "dxil.dll",
+              "vk_swiftshader_icd.json"]:
+        src = os.path.join(cef_dist, "Release", f)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(subfolder, f))
+            print(f"  Release/{f} -> nexus_js_loader/{f}")
+
+    # CEF resource files from Resources/
+    for f in ["icudtl.dat", "chrome_100_percent.pak",
+              "chrome_200_percent.pak", "resources.pak"]:
+        src = os.path.join(cef_dist, "Resources", f)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(subfolder, f))
+            print(f"  Resources/{f} -> nexus_js_loader/{f}")
+
+    # Locales
+    src_locales = os.path.join(cef_dist, "Resources", "locales")
+    if os.path.isdir(src_locales):
+        locale_count = 0
+        for lf in os.listdir(src_locales):
+            shutil.copy2(os.path.join(src_locales, lf),
+                         os.path.join(locales_dir, lf))
+            locale_count += 1
+        print(f"  Resources/locales/ ({locale_count} files) -> nexus_js_loader/locales/")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Wine/MSVC build helper")
     parser.add_argument("--link-only", action="store_true",
@@ -382,6 +433,7 @@ def main():
                 break
         if not any_newer:
             print("\nAll outputs up to date, skipping link steps.")
+            copy_runtime_files()
             print("\nBuild succeeded! (nothing to do)")
             return
 
@@ -423,17 +475,8 @@ def main():
         print("\nBuild FAILED - some outputs are missing")
         sys.exit(1)
 
-    # Step 7: Copy executables into nexus_js_loader/ subfolder
-    #         (mirrors the CMake post-build commands that ninja would run)
-    print("\n=== Copying executables to subfolder ===")
-    subfolder = os.path.join(BUILD_DIR_LINUX, "nexus_js_loader")
-    os.makedirs(subfolder, exist_ok=True)
-    import shutil
-    for exe in ["nexus_js_subprocess.exe", "nexus_js_cef_host.exe"]:
-        src = os.path.join(BUILD_DIR_LINUX, exe)
-        dst = os.path.join(subfolder, exe)
-        shutil.copy2(src, dst)
-        print(f"  {exe} -> nexus_js_loader/{exe}")
+    # Step 7: Copy executables and CEF runtime into subfolder
+    copy_runtime_files()
 
     print("\nBuild succeeded!")
 
