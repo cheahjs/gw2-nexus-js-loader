@@ -5,9 +5,7 @@
 #include "plugin/cef_loader.h"
 #include "plugin/overlay.h"
 #include "plugin/input_handler.h"
-#include "plugin/ipc_handler.h"
-#include "plugin/web_app_manager.h"
-#include "plugin/in_process_browser.h"
+#include "plugin/addon_manager.h"
 #include "imgui.h"
 
 // Forward declarations for Nexus callbacks
@@ -35,10 +33,6 @@ static int  s_frameCount = 0;
 static constexpr int CEF_INIT_DELAY_FRAMES = 300;  // ~5 seconds at 60fps
 static constexpr int CEF_RETRY_INTERVAL    = 60;   // retry every ~1 second
 
-// Watchdog: if browser isn't ready within this many ms, mark as failed.
-// Prevents indefinite hang if CefHost.exe renderer subprocess crashes.
-static constexpr DWORD BROWSER_CREATION_TIMEOUT_MS = 15000;  // 15 seconds
-
 extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef() {
     s_addonDef.Signature   = ADDON_SIGNATURE;
     s_addonDef.APIVersion  = NEXUS_API_VERSION;
@@ -57,7 +51,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef() {
 void AddonLoad(AddonAPI_t* aAPI) {
     Globals::API = aAPI;
 
-    aAPI->Log(LOGL_INFO, ADDON_NAME, "Loading JS Loader (in-process CEF)...");
+    aAPI->Log(LOGL_INFO, ADDON_NAME, "Loading JS Loader (multi-addon framework)...");
 
     // Set ImGui context and allocators to match Nexus.
     // Our DLL compiles its own ImGui 1.80 (matching Nexus's version).
@@ -86,7 +80,7 @@ void AddonLoad(AddonAPI_t* aAPI) {
     // At addon load time, CefInitialize may not have been called yet by GW2,
     // and we need to be on the CEF UI thread (which is the render thread).
     aAPI->Log(LOGL_INFO, ADDON_NAME,
-        "Will create browser when CEF is ready (deferred to render thread).");
+        "Will scan addons when CEF is ready (deferred to render thread).");
 
     Globals::IsLoaded = true;
     aAPI->Log(LOGL_INFO, ADDON_NAME, "JS Loader loaded successfully.");
@@ -110,8 +104,8 @@ void AddonUnload() {
     // Shutdown input handler
     InputHandler::Shutdown();
 
-    // Shutdown web apps and browser
-    WebAppManager::Shutdown();
+    // Shutdown all addons and browsers
+    AddonManager::Shutdown();
 
     Globals::API->Log(LOGL_INFO, ADDON_NAME, "JS Loader unloaded.");
     Globals::API = nullptr;
@@ -134,12 +128,11 @@ void OnPreRender() {
     if (s_cefFailed) return;
 
     // Deferred CEF initialization: wait for GW2 to fully initialize CEF,
-    // then create browser from the render thread.
+    // then scan addons and create browsers from the render thread.
     if (!s_cefInitialized) {
         ++s_frameCount;
 
         // Wait for startup delay before touching any CEF functions.
-        // Calling CEF functions before CefInitialize completes hangs under Wine.
         if (s_frameCount < CEF_INIT_DELAY_FRAMES) return;
 
         // Only retry periodically, not every frame
@@ -148,68 +141,43 @@ void OnPreRender() {
         // Check if libcef.dll is loaded and API hash matches
         if (!CefLoader::IsAvailable()) return;
 
-        // Try to create the browser (async). CreateBrowser will return false
-        // if CefInitialize hasn't been called yet.
         if (Globals::API) {
             Globals::API->Log(LOGL_INFO, ADDON_NAME,
-                "Attempting browser creation...");
+                "CEF available. Scanning for addons...");
         }
 
-        WebAppManager::Initialize();
+        AddonManager::Initialize();
         s_cefInitialized = true;
 
         if (Globals::API) {
             Globals::API->Log(LOGL_INFO, ADDON_NAME,
-                "Browser creation initiated from render thread.");
+                "Addon initialization complete.");
         }
         return;
     }
 
-    // Watchdog: check if browser creation is taking too long.
-    // If CefHost.exe renderer crashed, OnAfterCreated never fires and CEF
-    // may block GW2's main thread. Detect this via timeout + failure flag.
-    if (!WebAppManager::IsReady()) {
-        auto* browser = WebAppManager::GetBrowser();
-        if (browser && browser->HasCreationFailed()) {
-            s_cefFailed = true;
-            if (Globals::API) {
-                Globals::API->Log(LOGL_CRITICAL, ADDON_NAME,
-                    "Browser creation failed (renderer crashed). CEF disabled.");
-            }
-            WebAppManager::Shutdown();
-            return;
+    // Watchdog: check browser creation health across all addons.
+    if (AddonManager::CheckWatchdog()) {
+        // All addons failed — disable CEF
+        s_cefFailed = true;
+        if (Globals::API) {
+            Globals::API->Log(LOGL_CRITICAL, ADDON_NAME,
+                "All addon browsers failed. CEF disabled.");
         }
-
-        if (browser) {
-            DWORD elapsed = GetTickCount() - browser->GetCreationRequestTick();
-            if (elapsed > BROWSER_CREATION_TIMEOUT_MS) {
-                s_cefFailed = true;
-                if (Globals::API) {
-                    char msg[256];
-                    snprintf(msg, sizeof(msg),
-                        "Browser creation timed out after %lu ms. CEF disabled.",
-                        elapsed);
-                    Globals::API->Log(LOGL_CRITICAL, ADDON_NAME, msg);
-                }
-                WebAppManager::Shutdown();
-                return;
-            }
-        }
+        AddonManager::Shutdown();
+        return;
     }
 
-    // Apply any buffered CEF pixel data to the D3D11 texture.
-    // This MUST happen in PreRender (before ImGui frame begins), not in
-    // OnRender. Map/Unmap on the immediate context during an active ImGui
-    // render pass corrupts D3D11 pipeline state and crashes the game.
-    WebAppManager::FlushFrame();
+    // Apply any buffered CEF pixel data to D3D11 textures.
+    // This MUST happen in PreRender (before ImGui frame begins).
+    AddonManager::FlushAllFrames();
 
-    // Flush pending events/keybinds to JS
-    IpcHandler::FlushPendingEvents();
+    // Flush pending events/keybinds to JS for all addons
+    AddonManager::FlushAllPendingEvents();
 }
 
 void OnRender() {
     Overlay::Render();
-    Overlay::RenderDevTools();
 }
 
 void OnOptionsRender() {

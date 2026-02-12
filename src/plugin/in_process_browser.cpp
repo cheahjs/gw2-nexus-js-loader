@@ -288,8 +288,13 @@ void InProcessBrowser::OnLoadEnd(CefRefPtr<CefBrowser> /*browser*/,
                                   CefRefPtr<CefFrame> frame,
                                   int /*httpStatusCode*/) {
     if (frame->IsMain()) {
-        // Inject the nexus bridge JavaScript
-        frame->ExecuteJavaScript(NexusBridge::GetBridgeScript(), "nexus://bridge", 0);
+        // Inject addon/window identity preamble before the bridge script
+        std::string preamble;
+        if (!m_addonId.empty()) {
+            preamble = "window.__nexus_addon_id='" + m_addonId + "';"
+                       "window.__nexus_window_id='" + m_windowId + "';";
+        }
+        frame->ExecuteJavaScript(preamble + NexusBridge::GetBridgeScript(), "nexus://bridge", 0);
 
         if (Globals::API) {
             Globals::API->Log(LOGL_DEBUG, ADDON_NAME, "Nexus bridge injected.");

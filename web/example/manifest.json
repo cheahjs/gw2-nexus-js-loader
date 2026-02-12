@@ -1,0 +1,7 @@
+{
+    "name": "Example Addon",
+    "version": "1.0.0",
+    "author": "JS Loader",
+    "description": "Demonstrates all nexus.* API bindings including multi-window support",
+    "entry": "index.html"
+}

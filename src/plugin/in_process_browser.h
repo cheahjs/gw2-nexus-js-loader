@@ -66,6 +66,12 @@ public:
     bool HasCreationFailed() const { return m_creationFailed; }
     DWORD GetCreationRequestTick() const { return m_creationRequestTick; }
 
+    // Addon/window identity — used for bridge script contextualization
+    void SetAddonId(const std::string& id) { m_addonId = id; }
+    void SetWindowId(const std::string& id) { m_windowId = id; }
+    const std::string& GetAddonId() const { return m_addonId; }
+    const std::string& GetWindowId() const { return m_windowId; }
+
     // CefClient
     CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
@@ -114,6 +120,10 @@ private:
     // Creation failure tracking
     bool  m_creationFailed      = false;
     DWORD m_creationRequestTick = 0;
+
+    // Addon/window identity
+    std::string m_addonId;
+    std::string m_windowId;
 
     // OnPaint pixel buffer (CEF thread writes, render thread reads via FlushFrame)
     std::mutex             m_frameMutex;

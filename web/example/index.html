@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JS Loader - Example Web App</title>
+    <title>Example Addon</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <h1>GW2 Nexus JS Loader</h1>
-        <p class="subtitle">Example Web App</p>
+        <p class="subtitle">Example Addon — demonstrates all nexus.* APIs</p>
 
         <div class="section">
             <h2>Logging</h2>
             <div class="controls">
-                <input type="text" id="logChannel" placeholder="Channel" value="ExampleApp">
+                <input type="text" id="logChannel" placeholder="Channel" value="ExampleAddon">
                 <input type="text" id="logMessage" placeholder="Message" value="Hello from JS!">
                 <button onclick="testLog()">Log Info</button>
             </div>
@@ -103,6 +103,21 @@
                 <button onclick="translateLocalization()">Translate</button>
             </div>
             <pre id="locOutput" class="output"></pre>
+        </div>
+
+        <div class="section">
+            <h2>Windows</h2>
+            <div class="controls">
+                <input type="text" id="newWindowId" placeholder="Window ID" value="my-popup">
+                <input type="text" id="newWindowTitle" placeholder="Title" value="My Popup">
+                <button onclick="createWindow()">Create</button>
+                <button onclick="closeWindow()">Close</button>
+                <button onclick="listWindows()">List All</button>
+            </div>
+            <div class="controls">
+                <label><input type="checkbox" id="mainPassthrough"> Main window input passthrough</label>
+            </div>
+            <pre id="windowsOutput" class="output"></pre>
         </div>
 
         <div id="statusBar" class="status-bar">Ready</div>

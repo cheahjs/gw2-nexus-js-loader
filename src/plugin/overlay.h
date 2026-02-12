@@ -1,35 +1,38 @@
 #pragma once
 
+#include <string>
+
+class AddonInstance;
+struct WindowInfo;
 class InProcessBrowser;
 
-// Renders the CEF overlay as an ImGui window and the options panel.
+// Renders all addon windows as ImGui windows and the options panel.
 namespace Overlay {
 
-// Render the CEF overlay window. Call from RT_Render.
-void Render();
+// Hit test result: identifies which addon window (if any) is under a point.
+struct HitTestResult {
+    AddonInstance* addon = nullptr;
+    WindowInfo* window = nullptr;
+    bool isContentArea = false;
+    int localX = 0, localY = 0;
+};
 
-// Render the DevTools window (if open). Call from RT_Render after Render().
-void RenderDevTools();
+// Render all addon windows. Call from RT_Render.
+void Render();
 
 // Render the options/settings panel. Call from RT_OptionsRender.
 void RenderOptions();
 
-// Get the content area position (where the CEF texture starts).
-void GetOverlayPosition(float& x, float& y);
+// Hit-test a point (in client coordinates) against all addon windows.
+// Returns the topmost window under the cursor with local coordinates.
+HitTestResult HitTestAll(int clientX, int clientY);
 
-// Whether the overlay window had ImGui focus last frame.
-bool HasFocus();
-
-// Hit-test a point (in client coordinates) against the full overlay window
-// bounds (including title bar).
-bool HitTest(int clientX, int clientY);
-
-// Hit-test a point against the content area only (where the CEF texture is).
-bool ContentHitTest(int clientX, int clientY);
-
-// DevTools window — same hit-testing and position queries.
-void GetDevToolsPosition(float& x, float& y);
-bool DevToolsHasFocus();
-bool DevToolsContentHitTest(int clientX, int clientY);
+// Get the currently focused window (if any).
+// Returns the addon/window pair that had ImGui focus last frame.
+struct FocusResult {
+    AddonInstance* addon = nullptr;
+    WindowInfo* window = nullptr;
+};
+FocusResult GetFocusedWindow();
 
 } // namespace Overlay

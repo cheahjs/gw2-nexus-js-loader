@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Popup Window</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Popup Window</h1>
+        <p class="subtitle">Created via nexus.windows.create()</p>
+
+        <div class="section">
+            <h2>Window Info</h2>
+            <pre id="windowInfo" class="output">Loading...</pre>
+        </div>
+
+        <div class="section">
+            <h2>Input Passthrough</h2>
+            <div class="controls">
+                <button onclick="togglePassthrough()">Toggle Input Passthrough</button>
+            </div>
+            <pre id="passthroughStatus" class="output">Input passthrough: OFF</pre>
+        </div>
+
+        <div class="section">
+            <h2>Close</h2>
+            <div class="controls">
+                <button onclick="closeThis()">Close This Window</button>
+            </div>
+        </div>
+
+        <div id="statusBar" class="status-bar">Popup ready</div>
+    </div>
+
+    <script>
+        var windowId = window.__nexus_window_id || 'unknown';
+        var addonId = window.__nexus_addon_id || 'unknown';
+        var passthrough = false;
+
+        document.getElementById('windowInfo').textContent =
+            'Addon ID: ' + addonId + '\nWindow ID: ' + windowId;
+
+        function togglePassthrough() {
+            passthrough = !passthrough;
+            nexus.windows.setInputPassthrough(windowId, passthrough);
+            document.getElementById('passthroughStatus').textContent =
+                'Input passthrough: ' + (passthrough ? 'ON' : 'OFF');
+            document.getElementById('statusBar').textContent =
+                'Input passthrough ' + (passthrough ? 'enabled' : 'disabled');
+        }
+
+        function closeThis() {
+            nexus.windows.close(windowId);
+        }
+
+        nexus.log.info('ExampleAddon', 'Popup window "' + windowId + '" loaded');
+    </script>
+</body>
+</html>

@@ -6,13 +6,17 @@ namespace NexusBridge {
 // API surface identical to the V8 extension that js_bindings.cpp previously
 // provided in the renderer subprocess.
 //
-// JS→Native: console.log("__NEXUS__:" + JSON.stringify({action, ...}))
+// JS->Native: console.log("__NEXUS__:" + JSON.stringify({action, ...}))
 //   Intercepted by InProcessBrowser::OnConsoleMessage, stripped of prefix,
 //   parsed as JSON by IpcHandler::HandleBridgeMessage.
 //
-// Native→JS: window.__nexus_dispatch({type, ...})
+// Native->JS: window.__nexus_dispatch({type, ...})
 //   Called by IpcHandler via InProcessBrowser::ExecuteJavaScript for async
 //   responses, event callbacks, and keybind invocations.
+//
+// Each browser gets addon/window identity injected as a preamble before this
+// script (window.__nexus_addon_id, window.__nexus_window_id). The _send()
+// function includes these in every message for routing.
 
 static const std::string s_bridgeScript = R"JS(
 (function() {
@@ -22,6 +26,9 @@ static const std::string s_bridgeScript = R"JS(
     if (window.__nexus_bridge_loaded) return;
     window.__nexus_bridge_loaded = true;
 
+    var _addonId = window.__nexus_addon_id || '';
+    var _windowId = window.__nexus_window_id || '';
+
     var _nextRequestId = 1;
     var _pendingRequests = {};    // requestId -> { resolve, reject }
     var _eventCallbacks = {};    // eventName -> [callback, ...]
@@ -29,6 +36,8 @@ static const std::string s_bridgeScript = R"JS(
 
     // ---- Internal: send message to native ----
     function _send(msg) {
+        msg.__addonId = _addonId;
+        msg.__windowId = _windowId;
         console.log('__NEXUS__:' + JSON.stringify(msg));
     }
 
@@ -47,7 +56,7 @@ static const std::string s_bridgeScript = R"JS(
         });
     }
 
-    // ---- Native→JS dispatch handler ----
+    // ---- Native->JS dispatch handler ----
     window.__nexus_dispatch = function(data) {
         if (!data || !data.type) return;
 
@@ -159,6 +168,39 @@ static const std::string s_bridgeScript = R"JS(
             translate: function(id) { return _sendAsync('localization_translate', { id: id }); },
             set: function(id, lang, text) {
                 _send({ action: 'localization_set', id: id, lang: lang, text: text });
+            }
+        },
+
+        windows: {
+            create: function(windowId, options) {
+                options = options || {};
+                return _sendAsync('windows_create', {
+                    windowId: windowId,
+                    url: options.url || '',
+                    width: options.width || 800,
+                    height: options.height || 600,
+                    title: options.title || ''
+                });
+            },
+            close: function(windowId) {
+                _send({ action: 'windows_close', windowId: windowId });
+            },
+            update: function(windowId, options) {
+                options = options || {};
+                _send({
+                    action: 'windows_update',
+                    windowId: windowId,
+                    title: options.title,
+                    width: options.width,
+                    height: options.height,
+                    visible: options.visible
+                });
+            },
+            setInputPassthrough: function(windowId, enabled) {
+                _send({ action: 'windows_setInputPassthrough', windowId: windowId, enabled: enabled });
+            },
+            list: function() {
+                return _sendAsync('windows_list');
             }
         },
 

@@ -1,8 +1,8 @@
 #pragma once
 
 #define ADDON_NAME          "JS Loader"
-#define ADDON_AUTHOR        "jscheah"
-#define ADDON_DESCRIPTION   "Embeds CEF to render web apps as in-game overlays with JavaScript Nexus API bindings."
+#define ADDON_AUTHOR        "chehajs"
+#define ADDON_DESCRIPTION   "Uses CEF to render web apps as in-game overlays with JavaScript Nexus API bindings."
 
 #define ADDON_VERSION_MAJOR 0
 #define ADDON_VERSION_MINOR 1

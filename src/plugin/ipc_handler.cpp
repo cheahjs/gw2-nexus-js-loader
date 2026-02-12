@@ -1,5 +1,7 @@
 #include "ipc_handler.h"
 #include "in_process_browser.h"
+#include "addon_manager.h"
+#include "addon_instance.h"
 #include "globals.h"
 #include "shared/version.h"
 
@@ -8,7 +10,6 @@
 #include <string>
 #include <vector>
 #include <mutex>
-#include <array>
 #include <unordered_map>
 #include <cstring>
 
@@ -46,68 +47,17 @@ static std::string WcharToUtf8(const wchar_t* wstr, size_t maxLen) {
 
 namespace IpcHandler {
 
-// ---- Browser reference for ExecuteJavaScript calls ----
-
-static InProcessBrowser* s_browser = nullptr;
-
-// ---- Event dispatch infrastructure ----
-// EVENT_CONSUME is void(*)(void*) — a C function pointer that can't hold state.
-// We use a template-generated trampoline table so each event subscription gets
-// a unique function pointer that looks up its event name from a static table.
-
-struct PendingEvent {
-    std::string name;
-    std::string jsonData;
-};
-
-static std::mutex                    s_eventMutex;
-static std::vector<PendingEvent>     s_pendingEvents;
-
-static constexpr int MAX_EVENT_SLOTS = 64;
-static std::string s_eventSlotNames[MAX_EVENT_SLOTS];
-static bool        s_eventSlotUsed[MAX_EVENT_SLOTS] = {};
-
-template<int N>
-static void EventTrampoline(void* /*aEventArgs*/) {
-    std::lock_guard<std::mutex> lock(s_eventMutex);
-    s_pendingEvents.push_back({s_eventSlotNames[N], ""});
-}
-
-template<int... Is>
-static std::array<EVENT_CONSUME, sizeof...(Is)>
-MakeTrampolineTable(std::integer_sequence<int, Is...>) {
-    return {{ &EventTrampoline<Is>... }};
-}
-
-static auto s_trampolines = MakeTrampolineTable(
-    std::make_integer_sequence<int, MAX_EVENT_SLOTS>{});
-
-// Maps event name → trampoline slot index
-static std::unordered_map<std::string, int> s_eventSlots;
-
-// ---- Keybind dispatch infrastructure ----
-
-struct PendingKeybind {
-    std::string identifier;
-    bool        isRelease;
-};
-
-static std::mutex                     s_keybindMutex;
-static std::vector<PendingKeybind>    s_pendingKeybinds;
-static std::unordered_map<std::string, INPUTBINDS_PROCESS> s_keybindCallbacks;
-
 // ---- Helper: send async response to JS via ExecuteJavaScript ----
 
-static void SendAsyncResponse(int requestId, bool success, const std::string& value) {
-    if (!s_browser) return;
+static void SendAsyncResponse(InProcessBrowser* browser, int requestId,
+                               bool success, const std::string& value) {
+    if (!browser) return;
 
-    // Escape the value string for embedding in JS
     json j;
     j["type"] = "response";
     j["requestId"] = requestId;
     j["success"] = success;
 
-    // Try to parse value as JSON — if it parses, embed as object; otherwise as string
     try {
         j["value"] = json::parse(value);
     } catch (...) {
@@ -115,7 +65,7 @@ static void SendAsyncResponse(int requestId, bool success, const std::string& va
     }
 
     std::string code = "window.__nexus_dispatch(" + j.dump() + ");";
-    s_browser->ExecuteJavaScript(code);
+    browser->ExecuteJavaScript(code);
 }
 
 // ---- JSON message handlers ----
@@ -139,18 +89,18 @@ static bool HandleAlert(const json& msg) {
     return true;
 }
 
-static bool HandleEventsSubscribe(const json& msg) {
+static bool HandleEventsSubscribe(const json& msg, AddonInstance* addon) {
     std::string eventName = msg.value("name", "");
-    if (!eventName.empty()) {
-        SubscribeEvent(eventName);
+    if (!eventName.empty() && addon) {
+        addon->SubscribeEvent(eventName);
     }
     return true;
 }
 
-static bool HandleEventsUnsubscribe(const json& msg) {
+static bool HandleEventsUnsubscribe(const json& msg, AddonInstance* addon) {
     std::string eventName = msg.value("name", "");
-    if (!eventName.empty()) {
-        UnsubscribeEvent(eventName);
+    if (!eventName.empty() && addon) {
+        addon->UnsubscribeEvent(eventName);
     }
     return true;
 }
@@ -163,37 +113,25 @@ static bool HandleEventsRaise(const json& msg) {
     return true;
 }
 
-static bool HandleKeybindsRegister(const json& msg) {
+static bool HandleKeybindsRegister(const json& msg, AddonInstance* addon) {
     std::string identifier = msg.value("id", "");
     std::string defaultBind = msg.value("defaultBind", "");
-
-    if (identifier.empty()) return false;
-
-    auto callback = [](const char* aIdentifier, bool aIsRelease) {
-        std::lock_guard<std::mutex> lock(s_keybindMutex);
-        s_pendingKeybinds.push_back({aIdentifier, aIsRelease});
-    };
-
-    if (Globals::API) {
-        Globals::API->InputBinds_RegisterWithString(
-            identifier.c_str(), callback, defaultBind.c_str());
-        s_keybindCallbacks[identifier] = callback;
+    if (!identifier.empty() && addon) {
+        addon->RegisterKeybind(identifier, defaultBind);
     }
     return true;
 }
 
-static bool HandleKeybindsDeregister(const json& msg) {
+static bool HandleKeybindsDeregister(const json& msg, AddonInstance* addon) {
     std::string identifier = msg.value("id", "");
-    if (identifier.empty()) return false;
-
-    if (Globals::API) {
-        Globals::API->InputBinds_Deregister(identifier.c_str());
-        s_keybindCallbacks.erase(identifier);
+    if (!identifier.empty() && addon) {
+        addon->DeregisterKeybind(identifier);
     }
     return true;
 }
 
-static bool HandleGameBinds(const json& msg, const std::string& action) {
+static bool HandleGameBinds(const json& msg, const std::string& action,
+                             InProcessBrowser* browser) {
     int bind = msg.value("bind", 0);
 
     if (!Globals::API) return true;
@@ -208,16 +146,17 @@ static bool HandleGameBinds(const json& msg, const std::string& action) {
     } else if (action == "gamebinds_isBound") {
         int requestId = msg.value("requestId", 0);
         bool result = Globals::API->GameBinds_IsBound(static_cast<EGameBinds>(bind));
-        SendAsyncResponse(requestId, true, result ? "true" : "false");
+        SendAsyncResponse(browser, requestId, true, result ? "true" : "false");
     }
     return true;
 }
 
-static bool HandlePaths(const json& msg, const std::string& action) {
+static bool HandlePaths(const json& msg, const std::string& action,
+                         InProcessBrowser* browser) {
     int requestId = msg.value("requestId", 0);
 
     if (!Globals::API) {
-        SendAsyncResponse(requestId, false, "API not available");
+        SendAsyncResponse(browser, requestId, false, "API not available");
         return true;
     }
 
@@ -234,15 +173,16 @@ static bool HandlePaths(const json& msg, const std::string& action) {
         result = p ? p : "";
     }
 
-    SendAsyncResponse(requestId, true, result);
+    SendAsyncResponse(browser, requestId, true, result);
     return true;
 }
 
-static bool HandleDataLink(const json& msg, const std::string& action) {
+static bool HandleDataLink(const json& msg, const std::string& action,
+                            InProcessBrowser* browser) {
     int requestId = msg.value("requestId", 0);
 
     if (!Globals::API) {
-        SendAsyncResponse(requestId, false, "API not available");
+        SendAsyncResponse(browser, requestId, false, "API not available");
         return true;
     }
 
@@ -262,9 +202,9 @@ static bool HandleDataLink(const json& msg, const std::string& action) {
             j["cameraTop"] = { lm->fCameraTop[0], lm->fCameraTop[1], lm->fCameraTop[2] };
             j["identity"] = WcharToUtf8(lm->identity, 256);
             j["contextLen"] = lm->context_len;
-            SendAsyncResponse(requestId, true, j.dump());
+            SendAsyncResponse(browser, requestId, true, j.dump());
         } else {
-            SendAsyncResponse(requestId, false, "MumbleLink not available");
+            SendAsyncResponse(browser, requestId, false, "MumbleLink not available");
         }
     } else if (action == "datalink_getNexusLink") {
         NexusLinkData_t* nexusLink = static_cast<NexusLinkData_t*>(
@@ -277,9 +217,9 @@ static bool HandleDataLink(const json& msg, const std::string& action) {
             j["isMoving"] = nexusLink->IsMoving;
             j["isCameraMoving"] = nexusLink->IsCameraMoving;
             j["isGameplay"] = nexusLink->IsGameplay;
-            SendAsyncResponse(requestId, true, j.dump());
+            SendAsyncResponse(browser, requestId, true, j.dump());
         } else {
-            SendAsyncResponse(requestId, false, "NexusLink not available");
+            SendAsyncResponse(browser, requestId, false, "NexusLink not available");
         }
     }
     return true;
@@ -307,20 +247,97 @@ static bool HandleQuickAccess(const json& msg, const std::string& action) {
     return true;
 }
 
-static bool HandleLocalization(const json& msg, const std::string& action) {
+static bool HandleLocalization(const json& msg, const std::string& action,
+                                InProcessBrowser* browser) {
     if (!Globals::API) return true;
 
     if (action == "localization_translate") {
         int requestId = msg.value("requestId", 0);
         std::string id = msg.value("id", "");
         const char* result = Globals::API->Localization_Translate(id.c_str());
-        SendAsyncResponse(requestId, true, result ? result : id);
+        SendAsyncResponse(browser, requestId, true, result ? result : id);
     } else if (action == "localization_set") {
         std::string id   = msg.value("id", "");
         std::string lang = msg.value("lang", "");
         std::string text = msg.value("text", "");
         Globals::API->Localization_Set(id.c_str(), lang.c_str(), text.c_str());
     }
+    return true;
+}
+
+// ---- Window management handlers ----
+
+static bool HandleWindowsCreate(const json& msg, AddonInstance* addon,
+                                 InProcessBrowser* browser) {
+    int requestId = msg.value("requestId", 0);
+    std::string windowId = msg.value("windowId", "");
+    std::string url = msg.value("url", "");
+    int width = msg.value("width", 800);
+    int height = msg.value("height", 600);
+    std::string title = msg.value("title", "");
+
+    if (windowId.empty() || !addon) {
+        SendAsyncResponse(browser, requestId, false, "Invalid windowId or addon");
+        return true;
+    }
+
+    bool ok = addon->CreateAddonWindow(windowId, url, width, height, title);
+    SendAsyncResponse(browser, requestId, ok, ok ? "created" : "failed");
+    return true;
+}
+
+static bool HandleWindowsClose(const json& msg, AddonInstance* addon) {
+    std::string windowId = msg.value("windowId", "");
+    if (!windowId.empty() && addon) {
+        addon->CloseWindow(windowId);
+    }
+    return true;
+}
+
+static bool HandleWindowsUpdate(const json& msg, AddonInstance* addon) {
+    std::string windowId = msg.value("windowId", "");
+    if (windowId.empty() || !addon) return true;
+
+    std::string title = msg.value("title", "");
+    int width = msg.value("width", 0);
+    int height = msg.value("height", 0);
+    bool visible = msg.value("visible", true);
+
+    addon->UpdateWindow(windowId, title, width, height, visible);
+    return true;
+}
+
+static bool HandleWindowsSetInputPassthrough(const json& msg, AddonInstance* addon) {
+    std::string windowId = msg.value("windowId", "");
+    bool enabled = msg.value("enabled", false);
+    if (!windowId.empty() && addon) {
+        addon->SetInputPassthrough(windowId, enabled);
+    }
+    return true;
+}
+
+static bool HandleWindowsList(const json& msg, AddonInstance* addon,
+                               InProcessBrowser* browser) {
+    int requestId = msg.value("requestId", 0);
+
+    if (!addon) {
+        SendAsyncResponse(browser, requestId, false, "Addon not found");
+        return true;
+    }
+
+    json windowList = json::array();
+    for (const auto& [id, window] : addon->GetWindows()) {
+        json w;
+        w["windowId"] = window.windowId;
+        w["title"] = window.title;
+        w["width"] = window.width;
+        w["height"] = window.height;
+        w["visible"] = window.visible;
+        w["inputPassthrough"] = window.inputPassthrough;
+        windowList.push_back(w);
+    }
+
+    SendAsyncResponse(browser, requestId, true, windowList.dump());
     return true;
 }
 
@@ -341,27 +358,42 @@ bool HandleBridgeMessage(const std::string& jsonStr, InProcessBrowser* browser) 
     std::string action = msg.value("action", "");
     if (action.empty()) return false;
 
+    // Extract addon/window identity from message
+    std::string addonId = msg.value("__addonId", "");
+    std::string windowId = msg.value("__windowId", "");
+
+    // Fall back to browser's identity if not in message
+    if (addonId.empty() && browser) {
+        addonId = browser->GetAddonId();
+    }
+    if (windowId.empty() && browser) {
+        windowId = browser->GetWindowId();
+    }
+
+    // Look up the addon instance
+    AddonInstance* addon = AddonManager::GetAddon(addonId);
+
     // Route by action name
     if (action == "log")                   return HandleLog(msg);
     if (action == "alert")                 return HandleAlert(msg);
-    if (action == "events_subscribe")      return HandleEventsSubscribe(msg);
-    if (action == "events_unsubscribe")    return HandleEventsUnsubscribe(msg);
+    if (action == "events_subscribe")      return HandleEventsSubscribe(msg, addon);
+    if (action == "events_unsubscribe")    return HandleEventsUnsubscribe(msg, addon);
     if (action == "events_raise")          return HandleEventsRaise(msg);
-    if (action == "keybinds_register")     return HandleKeybindsRegister(msg);
-    if (action == "keybinds_deregister")   return HandleKeybindsDeregister(msg);
+    if (action == "keybinds_register")     return HandleKeybindsRegister(msg, addon);
+    if (action == "keybinds_deregister")   return HandleKeybindsDeregister(msg, addon);
 
     if (action == "gamebinds_press" || action == "gamebinds_release" ||
         action == "gamebinds_invoke" || action == "gamebinds_isBound") {
-        return HandleGameBinds(msg, action);
+        return HandleGameBinds(msg, action, browser);
     }
 
     if (action == "paths_getGameDirectory" || action == "paths_getAddonDirectory" ||
         action == "paths_getCommonDirectory") {
-        return HandlePaths(msg, action);
+        return HandlePaths(msg, action, browser);
     }
 
     if (action == "datalink_getMumbleLink" || action == "datalink_getNexusLink") {
-        return HandleDataLink(msg, action);
+        return HandleDataLink(msg, action, browser);
     }
 
     if (action == "quickaccess_add" || action == "quickaccess_remove" ||
@@ -370,134 +402,21 @@ bool HandleBridgeMessage(const std::string& jsonStr, InProcessBrowser* browser) 
     }
 
     if (action == "localization_translate" || action == "localization_set") {
-        return HandleLocalization(msg, action);
+        return HandleLocalization(msg, action, browser);
     }
+
+    // Window management actions
+    if (action == "windows_create")             return HandleWindowsCreate(msg, addon, browser);
+    if (action == "windows_close")              return HandleWindowsClose(msg, addon);
+    if (action == "windows_update")             return HandleWindowsUpdate(msg, addon);
+    if (action == "windows_setInputPassthrough") return HandleWindowsSetInputPassthrough(msg, addon);
+    if (action == "windows_list")               return HandleWindowsList(msg, addon, browser);
 
     if (Globals::API) {
         Globals::API->Log(LOGL_DEBUG, ADDON_NAME,
             (std::string("Unhandled bridge action: ") + action).c_str());
     }
     return false;
-}
-
-void SetBrowser(InProcessBrowser* browser) {
-    s_browser = browser;
-}
-
-void SubscribeEvent(const std::string& eventName) {
-    if (!Globals::API) return;
-
-    // Already subscribed?
-    if (s_eventSlots.count(eventName)) return;
-
-    // Allocate a trampoline slot
-    int slot = -1;
-    for (int i = 0; i < MAX_EVENT_SLOTS; ++i) {
-        if (!s_eventSlotUsed[i]) {
-            s_eventSlotUsed[i] = true;
-            s_eventSlotNames[i] = eventName;
-            slot = i;
-            break;
-        }
-    }
-
-    if (slot < 0) {
-        Globals::API->Log(LOGL_WARNING, ADDON_NAME,
-            "Too many event subscriptions — max 64 reached.");
-        return;
-    }
-
-    s_eventSlots[eventName] = slot;
-    Globals::API->Events_Subscribe(eventName.c_str(), s_trampolines[slot]);
-
-    Globals::API->Log(LOGL_DEBUG, ADDON_NAME,
-        (std::string("Subscribed to event: ") + eventName).c_str());
-}
-
-void UnsubscribeEvent(const std::string& eventName) {
-    if (!Globals::API) return;
-
-    auto it = s_eventSlots.find(eventName);
-    if (it != s_eventSlots.end()) {
-        int slot = it->second;
-        Globals::API->Events_Unsubscribe(eventName.c_str(), s_trampolines[slot]);
-        s_eventSlotUsed[slot] = false;
-        s_eventSlotNames[slot].clear();
-        s_eventSlots.erase(it);
-    }
-}
-
-void FlushPendingEvents() {
-    if (!s_browser) return;
-
-    // Flush events via ExecuteJavaScript
-    {
-        std::lock_guard<std::mutex> lock(s_eventMutex);
-        for (const auto& ev : s_pendingEvents) {
-            json j;
-            j["type"] = "event";
-            j["name"] = ev.name;
-            if (!ev.jsonData.empty()) {
-                try {
-                    j["data"] = json::parse(ev.jsonData);
-                } catch (...) {
-                    j["data"] = ev.jsonData;
-                }
-            } else {
-                j["data"] = nullptr;
-            }
-            std::string code = "window.__nexus_dispatch(" + j.dump() + ");";
-            s_browser->ExecuteJavaScript(code);
-        }
-        s_pendingEvents.clear();
-    }
-
-    // Flush keybinds via ExecuteJavaScript
-    {
-        std::lock_guard<std::mutex> lock(s_keybindMutex);
-        for (const auto& kb : s_pendingKeybinds) {
-            json j;
-            j["type"] = "keybind";
-            j["id"] = kb.identifier;
-            j["isRelease"] = kb.isRelease;
-            std::string code = "window.__nexus_dispatch(" + j.dump() + ");";
-            s_browser->ExecuteJavaScript(code);
-        }
-        s_pendingKeybinds.clear();
-    }
-}
-
-void Cleanup() {
-    // Unsubscribe all events
-    if (Globals::API) {
-        for (const auto& pair : s_eventSlots) {
-            Globals::API->Events_Unsubscribe(pair.first.c_str(), s_trampolines[pair.second]);
-        }
-    }
-    for (const auto& pair : s_eventSlots) {
-        s_eventSlotUsed[pair.second] = false;
-        s_eventSlotNames[pair.second].clear();
-    }
-    s_eventSlots.clear();
-
-    // Deregister all keybinds
-    if (Globals::API) {
-        for (const auto& pair : s_keybindCallbacks) {
-            Globals::API->InputBinds_Deregister(pair.first.c_str());
-        }
-    }
-    s_keybindCallbacks.clear();
-
-    {
-        std::lock_guard<std::mutex> lock1(s_eventMutex);
-        s_pendingEvents.clear();
-    }
-    {
-        std::lock_guard<std::mutex> lock2(s_keybindMutex);
-        s_pendingKeybinds.clear();
-    }
-
-    s_browser = nullptr;
 }
 
 } // namespace IpcHandler

@@ -75,8 +75,12 @@ set(PLUGIN_SOURCES
     src/plugin/overlay.cpp
     src/plugin/ipc_handler.h
     src/plugin/ipc_handler.cpp
-    src/plugin/web_app_manager.h
-    src/plugin/web_app_manager.cpp
+    src/plugin/addon_manager.h
+    src/plugin/addon_manager.cpp
+    src/plugin/addon_instance.h
+    src/plugin/addon_instance.cpp
+    src/plugin/addon_scheme_handler.h
+    src/plugin/addon_scheme_handler.cpp
 )
 
 add_library(nexus_js_loader SHARED ${PLUGIN_SOURCES} ${IMGUI_SOURCES} ${SHARED_SOURCES})

@@ -1,7 +1,8 @@
 #include "input_handler.h"
 #include "globals.h"
 #include "overlay.h"
-#include "web_app_manager.h"
+#include "addon_manager.h"
+#include "addon_instance.h"
 #include "in_process_browser.h"
 #include "shared/version.h"
 
@@ -19,24 +20,8 @@ static uint32_t GetModifiers() {
     return modifiers;
 }
 
-// Find which browser (main or DevTools) a mouse position targets.
-// Returns the browser and content origin for coordinate conversion.
-static InProcessBrowser* GetMouseTarget(int clientX, int clientY,
-                                         float& contentX, float& contentY) {
-    if (Overlay::ContentHitTest(clientX, clientY)) {
-        Overlay::GetOverlayPosition(contentX, contentY);
-        return WebAppManager::GetBrowser();
-    }
-    if (Overlay::DevToolsContentHitTest(clientX, clientY)) {
-        Overlay::GetDevToolsPosition(contentX, contentY);
-        return WebAppManager::GetDevToolsBrowser();
-    }
-    return nullptr;
-}
-
 // Mouse capture: while a button is held down, keep forwarding mouse events to the
 // browser that received the button-down, even if the cursor leaves the content area.
-// Without this, dragging scrollbars or selections breaks when the cursor moves outside.
 static InProcessBrowser* s_capturedBrowser = nullptr;
 static float s_captureOriginX = 0.0f;
 static float s_captureOriginY = 0.0f;
@@ -45,35 +30,43 @@ static float s_captureOriginY = 0.0f;
 // While active, mouse moves pass through too so ImGui can track the drag.
 static bool s_externalDrag = false;
 
-// Keyboard focus: set when clicking in a content area, cleared on click elsewhere.
-// This ensures clicking the game (or title bar, other windows) unfocuses the overlay.
-enum FocusTarget { FOCUS_NONE, FOCUS_OVERLAY, FOCUS_DEVTOOLS };
-static FocusTarget s_focus = FOCUS_NONE;
+// Keyboard focus: set on click based on which content area was clicked.
+// The focused window receives keyboard events.
+static AddonInstance* s_focusAddon = nullptr;
+static WindowInfo*    s_focusWindow = nullptr;
+// Special: focused DevTools browser (when DevTools content was clicked)
+static InProcessBrowser* s_focusDevTools = nullptr;
 
 static InProcessBrowser* GetKeyboardTarget() {
-    switch (s_focus) {
-        case FOCUS_OVERLAY:  return WebAppManager::GetBrowser();
-        case FOCUS_DEVTOOLS: return WebAppManager::GetDevToolsBrowser();
-        default:             return nullptr;
+    if (s_focusDevTools) return s_focusDevTools;
+    if (s_focusWindow && s_focusWindow->browser) {
+        return s_focusWindow->browser.get();
     }
+    return nullptr;
 }
 
 static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     // Nexus convention: return 0 = consumed, non-zero = pass through.
-    if (!Globals::OverlayVisible && !WebAppManager::IsDevToolsOpen()) return uMsg;
+    if (!Globals::OverlayVisible) return uMsg;
 
     // Update keyboard focus on any mouse-button-down event.
-    // Click in overlay content → focus overlay. Click in DevTools → focus DevTools.
-    // Click anywhere else (game, title bar, other addon) → clear focus.
     if (uMsg == WM_LBUTTONDOWN || uMsg == WM_RBUTTONDOWN || uMsg == WM_MBUTTONDOWN) {
         int clickX = GET_X_LPARAM(lParam);
         int clickY = GET_Y_LPARAM(lParam);
-        if (Overlay::ContentHitTest(clickX, clickY)) {
-            s_focus = FOCUS_OVERLAY;
-        } else if (Overlay::DevToolsContentHitTest(clickX, clickY)) {
-            s_focus = FOCUS_DEVTOOLS;
+        auto hit = Overlay::HitTestAll(clickX, clickY);
+        if (hit.isContentArea && hit.window) {
+            s_focusAddon = hit.addon;
+            s_focusWindow = hit.window;
+            s_focusDevTools = nullptr;
+        } else if (hit.isContentArea && !hit.window && hit.addon) {
+            // DevTools content area
+            s_focusAddon = hit.addon;
+            s_focusWindow = nullptr;
+            s_focusDevTools = hit.addon->GetDevToolsBrowser();
         } else {
-            s_focus = FOCUS_NONE;
+            s_focusAddon = nullptr;
+            s_focusWindow = nullptr;
+            s_focusDevTools = nullptr;
         }
     }
 
@@ -90,26 +83,50 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 return 0;
             }
             if (s_externalDrag) return uMsg;
-            float cx, cy;
-            InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
+
+            auto hit = Overlay::HitTestAll(clientX, clientY);
+            if (!hit.isContentArea) return uMsg;
+
+            // Check input passthrough
+            if (hit.window && hit.window->inputPassthrough) return uMsg;
+
+            InProcessBrowser* target = nullptr;
+            if (hit.window && hit.window->browser) {
+                target = hit.window->browser.get();
+            } else if (hit.addon) {
+                target = hit.addon->GetDevToolsBrowser();
+            }
             if (!target) return uMsg;
-            target->SendMouseMove(clientX - static_cast<int>(cx),
-                                  clientY - static_cast<int>(cy), modifiers);
+
+            target->SendMouseMove(hit.localX, hit.localY, modifiers);
             return 0;
         }
 
         case WM_LBUTTONDOWN: {
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
-            float cx, cy;
-            InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
+            auto hit = Overlay::HitTestAll(clientX, clientY);
+            if (!hit.isContentArea) { s_externalDrag = true; return uMsg; }
+
+            // Check input passthrough
+            if (hit.window && hit.window->inputPassthrough) { s_externalDrag = true; return uMsg; }
+
+            InProcessBrowser* target = nullptr;
+            float originX = 0, originY = 0;
+            if (hit.window && hit.window->browser) {
+                target = hit.window->browser.get();
+                originX = hit.window->contentX;
+                originY = hit.window->contentY;
+            } else if (hit.addon) {
+                target = hit.addon->GetDevToolsBrowser();
+                // DevTools uses s_dtX/s_dtY but we have localX/localY from HitTestAll
+            }
             if (!target) { s_externalDrag = true; return uMsg; }
-            target->SendMouseClick(clientX - static_cast<int>(cx),
-                                   clientY - static_cast<int>(cy),
-                                   modifiers, 0, false, 1);
+
+            target->SendMouseClick(hit.localX, hit.localY, modifiers, 0, false, 1);
             s_capturedBrowser = target;
-            s_captureOriginX = cx;
-            s_captureOriginY = cy;
+            s_captureOriginX = static_cast<float>(clientX - hit.localX);
+            s_captureOriginY = static_cast<float>(clientY - hit.localY);
             return 0;
         }
         case WM_LBUTTONUP: {
@@ -127,15 +144,22 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_RBUTTONDOWN: {
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
-            float cx, cy;
-            InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
+            auto hit = Overlay::HitTestAll(clientX, clientY);
+            if (!hit.isContentArea) { s_externalDrag = true; return uMsg; }
+            if (hit.window && hit.window->inputPassthrough) { s_externalDrag = true; return uMsg; }
+
+            InProcessBrowser* target = nullptr;
+            if (hit.window && hit.window->browser) {
+                target = hit.window->browser.get();
+            } else if (hit.addon) {
+                target = hit.addon->GetDevToolsBrowser();
+            }
             if (!target) { s_externalDrag = true; return uMsg; }
-            target->SendMouseClick(clientX - static_cast<int>(cx),
-                                   clientY - static_cast<int>(cy),
-                                   modifiers, 2, false, 1);
+
+            target->SendMouseClick(hit.localX, hit.localY, modifiers, 2, false, 1);
             s_capturedBrowser = target;
-            s_captureOriginX = cx;
-            s_captureOriginY = cy;
+            s_captureOriginX = static_cast<float>(clientX - hit.localX);
+            s_captureOriginY = static_cast<float>(clientY - hit.localY);
             return 0;
         }
         case WM_RBUTTONUP: {
@@ -153,15 +177,22 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_MBUTTONDOWN: {
             int clientX = GET_X_LPARAM(lParam);
             int clientY = GET_Y_LPARAM(lParam);
-            float cx, cy;
-            InProcessBrowser* target = GetMouseTarget(clientX, clientY, cx, cy);
+            auto hit = Overlay::HitTestAll(clientX, clientY);
+            if (!hit.isContentArea) { s_externalDrag = true; return uMsg; }
+            if (hit.window && hit.window->inputPassthrough) { s_externalDrag = true; return uMsg; }
+
+            InProcessBrowser* target = nullptr;
+            if (hit.window && hit.window->browser) {
+                target = hit.window->browser.get();
+            } else if (hit.addon) {
+                target = hit.addon->GetDevToolsBrowser();
+            }
             if (!target) { s_externalDrag = true; return uMsg; }
-            target->SendMouseClick(clientX - static_cast<int>(cx),
-                                   clientY - static_cast<int>(cy),
-                                   modifiers, 1, false, 1);
+
+            target->SendMouseClick(hit.localX, hit.localY, modifiers, 1, false, 1);
             s_capturedBrowser = target;
-            s_captureOriginX = cx;
-            s_captureOriginY = cy;
+            s_captureOriginX = static_cast<float>(clientX - hit.localX);
+            s_captureOriginY = static_cast<float>(clientY - hit.localY);
             return 0;
         }
         case WM_MBUTTONUP: {
@@ -177,16 +208,22 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         }
 
         case WM_MOUSEWHEEL: {
-            // WM_MOUSEWHEEL coordinates are in screen space — convert to client
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hWnd, &pt);
-            float cx, cy;
-            InProcessBrowser* target = GetMouseTarget(pt.x, pt.y, cx, cy);
+            auto hit = Overlay::HitTestAll(pt.x, pt.y);
+            if (!hit.isContentArea) return uMsg;
+            if (hit.window && hit.window->inputPassthrough) return uMsg;
+
+            InProcessBrowser* target = nullptr;
+            if (hit.window && hit.window->browser) {
+                target = hit.window->browser.get();
+            } else if (hit.addon) {
+                target = hit.addon->GetDevToolsBrowser();
+            }
             if (!target) return uMsg;
+
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-            target->SendMouseWheel(pt.x - static_cast<int>(cx),
-                                   pt.y - static_cast<int>(cy),
-                                   modifiers, 0, delta);
+            target->SendMouseWheel(hit.localX, hit.localY, modifiers, 0, delta);
             return 0;
         }
 
@@ -194,6 +231,9 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_KEYUP:
         case WM_SYSKEYDOWN:
         case WM_SYSKEYUP: {
+            // Check if focused window has input passthrough
+            if (s_focusWindow && s_focusWindow->inputPassthrough) return uMsg;
+
             InProcessBrowser* target = GetKeyboardTarget();
             if (!target) return uMsg;
             uint32_t type;
@@ -220,6 +260,8 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
         case WM_CHAR:
         case WM_SYSCHAR: {
+            if (s_focusWindow && s_focusWindow->inputPassthrough) return uMsg;
+
             InProcessBrowser* target = GetKeyboardTarget();
             if (!target) return uMsg;
             bool isSys = (uMsg == WM_SYSCHAR);
