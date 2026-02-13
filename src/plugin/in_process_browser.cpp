@@ -31,6 +31,7 @@ bool InProcessBrowser::Create(const std::string& url, int width, int height) {
 
     CefBrowserSettings settings;
     settings.windowless_frame_rate = 30;
+    settings.background_color = CefColorSetARGB(0, 0, 0, 0);
 
     // Pass non-null extra_info. GW2's CefHost.exe (renderer subprocess) has
     // custom CefRenderProcessHandler code that may dereference data from
@@ -258,6 +259,13 @@ void InProcessBrowser::FlushFrame() {
     if (!m_frameDirty) return;
     m_texture.UpdateFromPixels(m_frameBuffer.data(), m_frameWidth, m_frameHeight);
     m_frameDirty = false;
+}
+
+uint8_t InProcessBrowser::GetPixelAlpha(int x, int y) const {
+    std::lock_guard<std::mutex> lock(m_frameMutex);
+    if (m_frameBuffer.empty() || m_frameWidth <= 0 || m_frameHeight <= 0) return 0;
+    if (x < 0 || x >= m_frameWidth || y < 0 || y >= m_frameHeight) return 0;
+    return m_frameBuffer[(y * m_frameWidth + x) * 4 + 3]; // BGRA byte 3 = alpha
 }
 
 // ---- CefDisplayHandler ----

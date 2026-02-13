@@ -19,7 +19,7 @@ struct WindowInfo {
     std::string title;
     int width = 800, height = 600;
     bool visible = true;
-    bool inputPassthrough = false;  // JS-controlled per-window flag
+    int alphaThreshold = 0;         // 0=capture all, 1-255=alpha-based, 256=full passthrough
     CefRefPtr<InProcessBrowser> browser;
 
     // ImGui bounds (updated each frame by overlay)
@@ -52,7 +52,7 @@ public:
                       int width, int height, bool visible);
 
     // Set input passthrough flag for a window.
-    void SetInputPassthrough(const std::string& windowId, bool enabled);
+    void SetInputPassthrough(const std::string& windowId, int alphaThreshold);
 
     // Get all windows.
     std::map<std::string, WindowInfo>& GetWindows() { return m_windows; }

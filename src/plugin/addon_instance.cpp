@@ -160,9 +160,12 @@ void AddonInstance::UpdateWindow(const std::string& windowId, const std::string&
     w->visible = visible;
 }
 
-void AddonInstance::SetInputPassthrough(const std::string& windowId, bool enabled) {
+void AddonInstance::SetInputPassthrough(const std::string& windowId, int alphaThreshold) {
     auto* w = GetWindow(windowId);
-    if (w) w->inputPassthrough = enabled;
+    if (!w) return;
+    if (alphaThreshold < 0) alphaThreshold = 0;
+    if (alphaThreshold > 256) alphaThreshold = 256;
+    w->alphaThreshold = alphaThreshold;
 }
 
 WindowInfo* AddonInstance::GetWindow(const std::string& windowId) {

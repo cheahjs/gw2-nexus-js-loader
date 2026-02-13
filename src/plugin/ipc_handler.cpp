@@ -309,10 +309,17 @@ static bool HandleWindowsUpdate(const json& msg, AddonInstance* addon) {
 
 static bool HandleWindowsSetInputPassthrough(const json& msg, AddonInstance* addon) {
     std::string windowId = msg.value("windowId", "");
-    bool enabled = msg.value("enabled", false);
-    if (!windowId.empty() && addon) {
-        addon->SetInputPassthrough(windowId, enabled);
+    if (windowId.empty() || !addon) return true;
+
+    int threshold = 0;
+    if (msg.contains("alphaThreshold") && msg["alphaThreshold"].is_number()) {
+        threshold = msg["alphaThreshold"].get<int>();
+    } else if (msg.contains("enabled")) {
+        // Backward compatibility: bool maps to 0 (capture) or 256 (full passthrough)
+        threshold = msg["enabled"].get<bool>() ? 256 : 0;
     }
+
+    addon->SetInputPassthrough(windowId, threshold);
     return true;
 }
 
@@ -333,7 +340,8 @@ static bool HandleWindowsList(const json& msg, AddonInstance* addon,
         w["width"] = window.width;
         w["height"] = window.height;
         w["visible"] = window.visible;
-        w["inputPassthrough"] = window.inputPassthrough;
+        w["alphaThreshold"] = window.alphaThreshold;
+        w["inputPassthrough"] = (window.alphaThreshold >= 256);
         windowList.push_back(w);
     }
 

@@ -19,9 +19,11 @@
         <div class="section">
             <h2>Input Passthrough</h2>
             <div class="controls">
-                <button onclick="togglePassthrough()">Toggle Input Passthrough</button>
+                <button onclick="togglePassthrough()">Toggle Full Passthrough</button>
+                <button onclick="setAlphaPassthrough()">Alpha Mode (threshold=10)</button>
+                <button onclick="disablePassthrough()">Capture All</button>
             </div>
-            <pre id="passthroughStatus" class="output">Input passthrough: OFF</pre>
+            <pre id="passthroughStatus" class="output">Input passthrough: OFF (threshold=0)</pre>
         </div>
 
         <div class="section">
@@ -38,19 +40,41 @@
         // Read IDs lazily — they are set by the bridge preamble which is
         // injected in OnLoadStart (before this script runs). Reading on
         // demand ensures correctness even if timing varies.
-        var passthrough = false;
+        var currentThreshold = 0;
 
         document.getElementById('windowInfo').textContent =
             'Addon ID: ' + (window.__nexus_addon_id || '') +
             '\nWindow ID: ' + (window.__nexus_window_id || '');
 
-        function togglePassthrough() {
-            passthrough = !passthrough;
-            nexus.windows.setInputPassthrough(window.__nexus_window_id, passthrough);
+        function updateStatus() {
+            var label = currentThreshold === 0 ? 'OFF (capture all)' :
+                        currentThreshold >= 256 ? 'ON (full passthrough)' :
+                        'Alpha mode (threshold=' + currentThreshold + ')';
             document.getElementById('passthroughStatus').textContent =
-                'Input passthrough: ' + (passthrough ? 'ON' : 'OFF');
+                'Input passthrough: ' + label;
+        }
+
+        function togglePassthrough() {
+            currentThreshold = currentThreshold >= 256 ? 0 : 256;
+            nexus.windows.setInputPassthrough(window.__nexus_window_id, currentThreshold >= 256);
+            updateStatus();
             document.getElementById('statusBar').textContent =
-                'Input passthrough ' + (passthrough ? 'enabled' : 'disabled');
+                currentThreshold >= 256 ? 'Full passthrough enabled' : 'Passthrough disabled';
+        }
+
+        function setAlphaPassthrough() {
+            currentThreshold = 10;
+            nexus.windows.setInputPassthrough(window.__nexus_window_id, 10);
+            updateStatus();
+            document.getElementById('statusBar').textContent =
+                'Alpha passthrough enabled (threshold=10)';
+        }
+
+        function disablePassthrough() {
+            currentThreshold = 0;
+            nexus.windows.setInputPassthrough(window.__nexus_window_id, false);
+            updateStatus();
+            document.getElementById('statusBar').textContent = 'Input capture enabled';
         }
 
         function closeThis() {

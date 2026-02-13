@@ -11,6 +11,18 @@
 
 namespace InputHandler {
 
+// Check if input at the given local coordinates should pass through based on
+// the window's alpha threshold and the rendered pixel alpha at that position.
+static bool ShouldPassThrough(const WindowInfo* window, int localX, int localY) {
+    if (!window) return false;
+    int threshold = window->alphaThreshold;
+    if (threshold == 0) return false;
+    if (threshold >= 256) return true;
+    if (!window->browser) return false;
+    uint8_t alpha = window->browser->GetPixelAlpha(localX, localY);
+    return alpha < threshold;
+}
+
 // Build modifiers bitmask from current key state
 static uint32_t GetModifiers() {
     uint32_t modifiers = 0;
@@ -88,7 +100,7 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             if (!hit.isContentArea) return uMsg;
 
             // Check input passthrough
-            if (hit.window && hit.window->inputPassthrough) return uMsg;
+            if (ShouldPassThrough(hit.window, hit.localX, hit.localY)) return uMsg;
 
             InProcessBrowser* target = nullptr;
             if (hit.window && hit.window->browser) {
@@ -109,7 +121,7 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             if (!hit.isContentArea) { s_externalDrag = true; return uMsg; }
 
             // Check input passthrough
-            if (hit.window && hit.window->inputPassthrough) { s_externalDrag = true; return uMsg; }
+            if (ShouldPassThrough(hit.window, hit.localX, hit.localY)) { s_externalDrag = true; return uMsg; }
 
             InProcessBrowser* target = nullptr;
             float originX = 0, originY = 0;
@@ -146,7 +158,7 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             int clientY = GET_Y_LPARAM(lParam);
             auto hit = Overlay::HitTestAll(clientX, clientY);
             if (!hit.isContentArea) { s_externalDrag = true; return uMsg; }
-            if (hit.window && hit.window->inputPassthrough) { s_externalDrag = true; return uMsg; }
+            if (ShouldPassThrough(hit.window, hit.localX, hit.localY)) { s_externalDrag = true; return uMsg; }
 
             InProcessBrowser* target = nullptr;
             if (hit.window && hit.window->browser) {
@@ -179,7 +191,7 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             int clientY = GET_Y_LPARAM(lParam);
             auto hit = Overlay::HitTestAll(clientX, clientY);
             if (!hit.isContentArea) { s_externalDrag = true; return uMsg; }
-            if (hit.window && hit.window->inputPassthrough) { s_externalDrag = true; return uMsg; }
+            if (ShouldPassThrough(hit.window, hit.localX, hit.localY)) { s_externalDrag = true; return uMsg; }
 
             InProcessBrowser* target = nullptr;
             if (hit.window && hit.window->browser) {
@@ -212,7 +224,7 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             ScreenToClient(hWnd, &pt);
             auto hit = Overlay::HitTestAll(pt.x, pt.y);
             if (!hit.isContentArea) return uMsg;
-            if (hit.window && hit.window->inputPassthrough) return uMsg;
+            if (ShouldPassThrough(hit.window, hit.localX, hit.localY)) return uMsg;
 
             InProcessBrowser* target = nullptr;
             if (hit.window && hit.window->browser) {
@@ -232,7 +244,7 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_SYSKEYDOWN:
         case WM_SYSKEYUP: {
             // Check if focused window has input passthrough
-            if (s_focusWindow && s_focusWindow->inputPassthrough) return uMsg;
+            if (s_focusWindow && s_focusWindow->alphaThreshold >= 256) return uMsg;
 
             InProcessBrowser* target = GetKeyboardTarget();
             if (!target) return uMsg;
@@ -260,7 +272,7 @@ static UINT WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
         case WM_CHAR:
         case WM_SYSCHAR: {
-            if (s_focusWindow && s_focusWindow->inputPassthrough) return uMsg;
+            if (s_focusWindow && s_focusWindow->alphaThreshold >= 256) return uMsg;
 
             InProcessBrowser* target = GetKeyboardTarget();
             if (!target) return uMsg;

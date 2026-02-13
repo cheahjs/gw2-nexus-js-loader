@@ -118,11 +118,29 @@ void Render() {
                                    | ImGuiWindowFlags_NoScrollWithMouse
                                    | ImGuiWindowFlags_NoCollapse;
 
-            // When input passthrough is enabled, tell ImGui to ignore mouse
-            // events for this window so clicks pass through to the game.
-            if (window.inputPassthrough) {
+            // Alpha-based input passthrough: decide per-frame whether ImGui
+            // should ignore mouse events for this window.
+            if (window.alphaThreshold >= 256) {
+                // Full passthrough — always ignore mouse input
                 flags |= ImGuiWindowFlags_NoMouseInputs;
+            } else if (window.alphaThreshold > 0 && window.browser) {
+                // Alpha-based — check pixel under cursor
+                ImVec2 mousePos = ImGui::GetMousePos();
+                // Use previous frame's content position to compute local coords
+                int localX = static_cast<int>(mousePos.x - window.contentX);
+                int localY = static_cast<int>(mousePos.y - window.contentY);
+                // If cursor is inside the content area, test pixel alpha
+                if (localX >= 0 && localX < window.contentW &&
+                    localY >= 0 && localY < window.contentH) {
+                    uint8_t alpha = window.browser->GetPixelAlpha(localX, localY);
+                    if (alpha < window.alphaThreshold) {
+                        flags |= ImGuiWindowFlags_NoMouseInputs;
+                    }
+                }
+                // If cursor is outside content (e.g. title bar), don't set
+                // the flag so dragging still works.
             }
+            // threshold 0: no flag change (capture all input)
 
             if (ImGui::Begin(imguiId.c_str(), &window.visible, flags)) {
                 // Track full window bounds for input hit testing
@@ -225,11 +243,19 @@ void RenderOptions() {
                 const auto& windows = addon->GetWindows();
                 ImGui::Text("Windows (%d):", static_cast<int>(windows.size()));
                 for (const auto& [winId, window] : windows) {
+                    const char* ptLabel = "";
+                    char ptBuf[32] = "";
+                    if (window.alphaThreshold >= 256) {
+                        ptLabel = " [passthrough]";
+                    } else if (window.alphaThreshold > 0) {
+                        snprintf(ptBuf, sizeof(ptBuf), " [alpha<%d]", window.alphaThreshold);
+                        ptLabel = ptBuf;
+                    }
                     ImGui::BulletText("%s: %s (%dx%d) %s%s",
                         winId.c_str(), window.title.c_str(),
                         window.contentW, window.contentH,
                         window.visible ? "visible" : "hidden",
-                        window.inputPassthrough ? " [passthrough]" : "");
+                        ptLabel);
                 }
 
                 // Actions

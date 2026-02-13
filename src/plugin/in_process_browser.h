@@ -51,6 +51,10 @@ public:
     int GetWidth() const { return m_width; }
     int GetHeight() const { return m_height; }
 
+    // Read the alpha value of the pixel at (x, y) from the frame buffer.
+    // Returns 0 for out-of-bounds or empty buffer.
+    uint8_t GetPixelAlpha(int x, int y) const;
+
     // Apply buffered pixel data to the D3D11 texture.
     // Must be called on the render thread (e.g. from OnPreRender).
     void FlushFrame();
@@ -132,7 +136,7 @@ private:
     std::string BuildBridgeScript() const;
 
     // OnPaint pixel buffer (CEF thread writes, render thread reads via FlushFrame)
-    std::mutex             m_frameMutex;
+    mutable std::mutex     m_frameMutex;
     std::vector<uint8_t>   m_frameBuffer;
     int                    m_frameWidth  = 0;
     int                    m_frameHeight = 0;

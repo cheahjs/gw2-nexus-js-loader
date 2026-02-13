@@ -242,10 +242,22 @@ async function listWindows() {
     }
 }
 
-// Main window input passthrough toggle
+// Main window input passthrough toggle (boolean for full passthrough)
 document.getElementById('mainPassthrough').addEventListener('change', function() {
     nexus.windows.setInputPassthrough('main', this.checked);
     setStatus('Main window input passthrough: ' + (this.checked ? 'ON' : 'OFF'));
+});
+
+// Alpha-based passthrough (threshold=10: transparent areas pass through)
+document.getElementById('mainAlphaPassthrough').addEventListener('change', function() {
+    if (this.checked) {
+        document.getElementById('mainPassthrough').checked = false;
+        nexus.windows.setInputPassthrough('main', 10);
+        setStatus('Main window alpha passthrough: ON (threshold=10)');
+    } else {
+        nexus.windows.setInputPassthrough('main', false);
+        setStatus('Main window alpha passthrough: OFF');
+    }
 });
 
 // ---- Initialization ----

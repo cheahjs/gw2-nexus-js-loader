@@ -196,8 +196,16 @@ static const std::string s_bridgeScript = R"JS(
                     visible: options.visible
                 });
             },
-            setInputPassthrough: function(windowId, enabled) {
-                _send({ action: 'windows_setInputPassthrough', windowId: windowId, enabled: enabled });
+            setInputPassthrough: function(windowId, value) {
+                var msg = { action: 'windows_setInputPassthrough', windowId: windowId };
+                if (typeof value === 'boolean') {
+                    msg.enabled = value;
+                } else if (typeof value === 'number') {
+                    msg.alphaThreshold = Math.max(0, Math.min(256, Math.floor(value)));
+                } else {
+                    msg.enabled = !!value;
+                }
+                _send(msg);
             },
             list: function() {
                 return _sendAsync('windows_list');
